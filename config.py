@@ -30,4 +30,3 @@ FRAME_HEIGHT = 480
 TTS_RATE = 200
 TTS_VOLUME = 0.9
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"  # 使用 Edge-TTS 的优秀音色
- Borough
