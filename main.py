@@ -1,22 +1,17 @@
 import os
 import sys
+import subprocess
 import pvporcupine
 import pyaudio
 import struct
 import whisper
 import requests
-import pyttsx3
 import cv2
 import numpy as np
 import insightface
 from onnxruntime import InferenceSession
 
 from config import *
-
-# 初始化TTS引擎
-tts_engine = pyttsx3.init()
-tts_engine.setProperty('rate', TTS_RATE)
-tts_engine.setProperty('volume', TTS_VOLUME)
 
 # 初始化Whisper模型
 print("🔊 加载语音识别模型...")
@@ -153,10 +148,18 @@ def call_openclaw(text, emotion=None):
         return "网络连接出现问题，请稍后再试。"
 
 def speak(text):
-    """语音合成"""
-    print("🗣️  回复中...")
-    tts_engine.say(text)
-    tts_engine.runAndWait()
+    """使用 macOS 原生 say 命令进行语音合成"""
+    if not text:
+        return
+    print(f"🗣️  机器人说：{text}")
+    try:
+        # 使用 -v Mei-Jia 参数可以让声音更自然（如果系统安装了该语音）
+        # 如果没有该语音，会自动回退到默认语音
+        subprocess.run(["say", "-v", "Mei-Jia", text], check=True)
+    except Exception as e:
+        print(f"❌ 语音播放失败: {e}")
+        # 降级方案：使用基础 say
+        subprocess.run(["say", text])
 
 def main():
     print("✅ 语音助手已启动，等待唤醒词...")
