@@ -1,6 +1,8 @@
 import os
 import sys
 import subprocess
+import asyncio
+import edge_tts
 import pvporcupine
 import pyaudio
 import struct
@@ -14,8 +16,8 @@ from onnxruntime import InferenceSession
 from config import *
 
 # 初始化Whisper模型
-print("🔊 加载语音识别模型...")
-whisper_model = whisper.load_model("small")
+print(f"🔊 加载语音识别模型 ({WHISPER_MODEL})...")
+whisper_model = whisper.load_model(WHISPER_MODEL)
 
 # 初始化人脸识别模型
 if ENABLE_FACE_RECOGNITION:
@@ -82,18 +84,45 @@ def detect_face_and_emotion():
     
     return faces[0], emotion
 
-def record_audio(duration):
-    """录制音频"""
-    print("🎙️  正在录音...")
+def record_audio(max_duration):
+    """录制音频，支持静音检测和长句子"""
+    print(f"🎙️  开始录音 (最长 {max_duration}s)...")
     frames = []
-    # 增加一个小延迟，避免刚唤醒时的缓冲区溢出
-    for _ in range(0, int(porcupine.sample_rate / porcupine.frame_length * duration)):
+    
+    # 简单的静音检测参数
+    CHUNK_SIZE = porcupine.frame_length
+    SILENCE_THRESHOLD = 500  # 能量阈值
+    SILENCE_DURATION = 1.5   # 连续静音秒数
+    silence_frames_limit = int(porcupine.sample_rate / CHUNK_SIZE * SILENCE_DURATION)
+    
+    silence_counter = 0
+    recorded_frames = 0
+    max_frames = int(porcupine.sample_rate / CHUNK_SIZE * max_duration)
+    
+    while recorded_frames < max_frames:
         try:
-            pcm = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
-            frames.append(pcm)
+            pcm_data = audio_stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            frames.append(pcm_data)
+            recorded_frames += 1
+            
+            # 计算能量用于静音停止（可选，这里先实现长句收录）
+            pcm_unpacked = struct.unpack_from("h" * CHUNK_SIZE, pcm_data)
+            energy = np.abs(pcm_unpacked).mean()
+            
+            if energy < SILENCE_THRESHOLD:
+                silence_counter += 1
+            else:
+                silence_counter = 0
+                
+            # 如果连续录够了基准时长且持续静音，则提前结束
+            if recorded_frames > int(porcupine.sample_rate / CHUNK_SIZE * 3) and silence_counter > silence_frames_limit:
+                print("⏹️  检测到静音，停止录音")
+                break
+                
         except Exception as e:
-            print(f"⚠️ 录音跳帧: {e}")
-            continue
+            print(f"⚠️ 录音异常: {e}")
+            break
+            
     return b''.join(frames)
 
 def audio_to_text(audio_data):
@@ -147,20 +176,31 @@ def call_openclaw(text, emotion=None):
         print(f"❌ OpenClaw调用失败: {e}")
         return "网络连接出现问题，请稍后再试。"
 
+async def _edge_speak(text):
+    """内部异步语音合成函数"""
+    communicate = edge_tts.Communicate(text, TTS_VOICE)
+    temp_file = "/tmp/reply.mp3"
+    await communicate.save(temp_file)
+    # 使用 afplay (macOS 自带) 播放 mp3
+    subprocess.run(["afplay", temp_file])
+    if os.path.exists(temp_file):
+        os.remove(temp_file)
+
 def speak(text):
-    """使用 macOS 原生 say 命令进行语音合成"""
+    """语音合成，支持智能切换引擎"""
     if not text:
         return
-    print(f"🗣️  机器人说：{text}")
+    print(f"🤖 阿信：{text}")
     try:
-        # 使用 -v Mei-Jia 参数可以让声音更自然（如果系统安装了该语音）
-        # 如果没有该语音，会自动回退到默认语音
-        subprocess.run(["say", "-v", "Mei-Jia", text], check=True)
+        # 使用 edge-tts 获得高级自然语音
+        asyncio.run(_edge_speak(text))
     except Exception as e:
-        print(f"❌ 语音播放失败: {e}")
-        # 降级方案：使用基础 say
-        subprocess.run(["say", text])
-
+        print(f"⚠️ Edge-TTS 失败，降级使用系统语音: {e}")
+        try:
+            subprocess.run(["say", "-v", "Mei-Jia", text], check=True)
+        except:
+            subprocess.run(["say", text])
+ 
 def main():
     print("✅ 语音助手已启动，等待唤醒词...")
     print("💡 唤醒词：Hey Pico (可以在配置中修改)")
@@ -187,9 +227,10 @@ def main():
                     face, emotion = detect_face_and_emotion()
                     if emotion:
                         print(f"😊 当前情绪：{emotion}")
+                        speak(f"检测到你现在的状态是{emotion}")
                 
-                # 录制语音
-                audio_data = record_audio(RECORD_SECONDS)
+                # 录制语音 (使用配置的长句录制时长)
+                audio_data = record_audio(MAX_RECORD_SECONDS)
                 
                 # 语音转文字
                 text = audio_to_text(audio_data)

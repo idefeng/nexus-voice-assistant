@@ -16,6 +16,10 @@ ENABLE_EMOTION_ANALYSIS = True
 SAMPLERATE = 16000
 CHANNELS = 1
 RECORD_SECONDS = 5
+MAX_RECORD_SECONDS = 30  # 支持长句子收录
+
+# 模型配置
+WHISPER_MODEL = "medium"  # 升级到 medium 以获得更好识别精度
 
 # 摄像头配置
 CAMERA_ID = 0
@@ -25,3 +29,5 @@ FRAME_HEIGHT = 480
 # TTS配置
 TTS_RATE = 200
 TTS_VOLUME = 0.9
+TTS_VOICE = "zh-CN-XiaoxiaoNeural"  # 使用 Edge-TTS 的优秀音色
+ Borough
