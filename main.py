@@ -11,9 +11,22 @@ import requests
 import cv2
 import numpy as np
 import insightface
+import threading
+import rumps
+import random
+import datetime
 from onnxruntime import InferenceSession
 
 from config import *
+
+# 状态表情常量
+STATUS_IDLE = "💤"
+STATUS_LISTENING = "🎙️"
+STATUS_THINKING = "🤔"
+STATUS_SPEAKING = "🗣️"
+
+# 自然语气词
+NATURAL_FILLERS = ["嗯...", "我想想...", "好的，我明白了。", "原来是这样。", "让我想一下。"]
 
 # 初始化Whisper模型
 print(f"🔊 加载语音识别模型 ({WHISPER_MODEL})...")
@@ -127,6 +140,7 @@ def record_audio(max_duration):
 
 def audio_to_text(audio_data):
     """语音转文字"""
+    app.title = STATUS_THINKING
     print("✍️  识别中...")
     # 保存临时wav文件
     import wave
@@ -142,13 +156,35 @@ def audio_to_text(audio_data):
     os.remove("/tmp/recording.wav")
     return result["text"]
 
+def get_time_greeting():
+    """获取时间相关的问候语"""
+    hour = datetime.datetime.now().hour
+    if 5 <= hour < 11:
+        return "早安！今天也是充满活力的一天。"
+    elif 11 <= hour < 14:
+        return "午安！记得休息一下按时吃饭哦。"
+    elif 14 <= hour < 18:
+        return "下午好！需要喝点咖啡提提神吗？"
+    elif 18 <= hour < 23:
+        return "晚上好！忙碌的一天辛苦了。"
+    else:
+        return "太晚了，注意休息哦，德哥。"
+
 def call_openclaw(text, emotion=None):
-    """调用OpenClaw接口获取回复 (OpenAI兼容接口)"""
+    """调用OpenClaw接口获取回复 (增强情感理解)"""
+    app.title = STATUS_THINKING
     try:
-        # 根据情绪调整Prompt
-        content = text
+        # 情感引导指令
+        system_prompt = "你是一个亲切、聪明的助手，名叫阿信。"
         if emotion:
-            content = f"[用户当前情绪：{emotion}] {text}"
+            emotion_prompts = {
+                'happy': "用户现在心情很好，你的回复应该保持轻快、活泼，并分享这份快乐。",
+                'sad': "用户现在看起来有点难过，请展示出你的温柔和包容，多给予一些鼓励和支持。",
+                'angry': "用户现在可能有情绪，请保持专业、冷静，并尝试用平和的语气引导，不要在这个时候开玩笑。",
+                'surprise': "用户感到惊讶，你可以用好奇和探索的语气和他交流。",
+                'neutral': "保持亲切自然的交流风格即可。"
+            }
+            system_prompt += f" {emotion_prompts.get(emotion, '根据用户的情感状态，给予人性化的反馈。')}"
             
         headers = {
             "Authorization": f"Bearer {OPENCLAW_TOKEN}",
@@ -156,9 +192,10 @@ def call_openclaw(text, emotion=None):
         }
         
         payload = {
-            "model": SESSION_KEY,  # 这里SESSION_KEY即Agent ID (e.g., 'scholar')
+            "model": SESSION_KEY,
             "messages": [
-                {"role": "user", "content": content}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
             ]
         }
         
@@ -186,10 +223,19 @@ async def _edge_speak(text):
     if os.path.exists(temp_file):
         os.remove(temp_file)
 
-def speak(text):
-    """语音合成，支持智能切换引擎"""
+def speak(text, with_filler=False):
+    """语音合成，支持智能切换引擎和自然语气词"""
     if not text:
         return
+    
+    app.title = STATUS_SPEAKING
+    
+    # 随机添加语气助词
+    if with_filler and random.random() < 0.4:
+        filler = random.choice(NATURAL_FILLERS)
+        print(f"🤖 阿信 (Filler)：{filler}")
+        asyncio.run(_edge_speak(filler))
+        
     print(f"🤖 阿信：{text}")
     try:
         # 使用 edge-tts 获得高级自然语音
@@ -200,10 +246,29 @@ def speak(text):
             subprocess.run(["say", "-v", "Mei-Jia", text], check=True)
         except:
             subprocess.run(["say", text])
+    
+    app.title = STATUS_IDLE
  
-def main():
+class VoiceAssistantApp(rumps.App):
+    def __init__(self):
+        super(VoiceAssistantApp, self).__init__("阿信", title=STATUS_IDLE)
+        self.menu = ["关于阿信", "重启助手"]
+
+    @rumps.clicked("关于阿信")
+    def about(self, _):
+        rumps.alert("阿信 v1.2.0\n您的智能数字副官\n\n状态说明：\n💤 待机\n🎙️ 倾听\n🤔 思考\n🗣️ 播报")
+
+    @rumps.clicked("重启助手")
+    def restart(self, _):
+        os.execv(sys.executable, ['python'] + sys.argv)
+
+def run_voice_assistant():
+    """主逻辑循环，运行在后台线程"""
+    global is_first_run
+    is_first_run = True
+    
     print("✅ 语音助手已启动，等待唤醒词...")
-    print("💡 唤醒词：Hey Pico (可以在配置中修改)")
+    app.title = STATUS_IDLE
     
     try:
         while True:
@@ -211,17 +276,23 @@ def main():
                 pcm = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
                 pcm = struct.unpack_from("h" * porcupine.frame_length, pcm)
             except OSError as e:
-                # 忽略特定平台的缓冲区溢出错误
-                if e.errno == -9981:
-                    continue
+                if e.errno == -9981: continue
                 raise
             
             keyword_index = porcupine.process(pcm)
             if keyword_index >= 0:
                 print("\n🎉 唤醒成功！")
-                speak("我在呢")
+                
+                # 每日首次唤醒礼
+                if is_first_run:
+                    greeting = get_time_greeting()
+                    speak(greeting)
+                    is_first_run = False
+                else:
+                    speak("我在呢")
                 
                 # 检测人脸和情绪
+                app.title = STATUS_THINKING
                 emotion = None
                 if ENABLE_FACE_RECOGNITION and ENABLE_EMOTION_ANALYSIS:
                     face, emotion = detect_face_and_emotion()
@@ -229,7 +300,8 @@ def main():
                         print(f"😊 当前情绪：{emotion}")
                         speak(f"检测到你现在的状态是{emotion}")
                 
-                # 录制语音 (使用配置的长句录制时长)
+                # 录制语音
+                app.title = STATUS_LISTENING
                 audio_data = record_audio(MAX_RECORD_SECONDS)
                 
                 # 语音转文字
@@ -238,23 +310,26 @@ def main():
                 
                 if not text.strip():
                     speak("抱歉，我没听清你说什么。")
+                    app.title = STATUS_IDLE
                     continue
                 
-                # 调用OpenClaw
+                # 调用OpenClaw (传入 True 以使用自然语气词)
                 response = call_openclaw(text, emotion)
-                print(f"🤖 阿信：{response}")
-                
-                # 语音回复
-                speak(response)
+                speak(response, with_filler=True)
                 
                 print("\n✅ 回复完成，继续等待唤醒...")
+                app.title = STATUS_IDLE
                 
-    except KeyboardInterrupt:
-        print("\n👋 退出程序")
+    except Exception as e:
+        print(f"❌ 后台执行错误: {e}")
     finally:
         audio_stream.close()
         pa.terminate()
         porcupine.delete()
 
 if __name__ == "__main__":
-    main()
+    app = VoiceAssistantApp()
+    # 启动后台逻辑线程
+    threading.Thread(target=run_voice_assistant, daemon=True).start()
+    # 运行 UI 主循环
+    app.run()
