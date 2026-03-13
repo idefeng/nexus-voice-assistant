@@ -30,8 +30,16 @@ logging.getLogger("chromadb").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
+# 日志净化 (v7.0.0)
+def silence_stderr():
+    f = open(os.devnull, 'w')
+    os.dup2(f.fileno(), sys.stderr.fileno())
+
+silence_stderr()
+
 from config import *
 from memory_manager import memory_manager
+from scripts.context_helper import get_active_window_info, get_system_load
 
 # 状态表情
 STATUS_IDLE = "💤"
@@ -216,6 +224,15 @@ def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=
                 sys_p += " 【场景：主动屏幕洞察】请根据截图给主人一条温暖的建议或见解。"
             else:
                 sys_p += " 【场景：主动问候】打个亲切招呼，带点记忆感。"
+        
+        # 注入场景与情感背景 (v7.0.0)
+        active_app = get_active_window_info()
+        recent_emos = memory_manager.get_recent_emotions() if memory_manager else []
+        emo_context = f"用户最近的心情轨迹：{', '.join(recent_emos)}" if recent_emos else ""
+        
+        sys_p += f"\n【当前系统场景】用户正在使用: {active_app}"
+        if emo_context: sys_p += f"\n【历史情感背景】{emo_context}"
+        
         if mem: sys_p += f"\n背景记忆：{mem}"
         
         user_c = []
@@ -368,7 +385,9 @@ def run_voice_assistant():
                     speak(f"好的，帮您执行：{', '.join([c['function']['name'] for c in res['calls']])}")
                 
                 if i_p and os.path.exists(i_p): os.remove(i_p)
-                if ENABLE_MEMORY: threading.Thread(target=memory_manager.extract_and_save_facts, args=(text, str(res)), daemon=True).start()
+                if ENABLE_MEMORY and memory_manager:
+                    memory_manager.save_emotion(face_res['emotion'])
+                    threading.Thread(target=memory_manager.extract_and_save_facts, args=(text, str(res)), daemon=True).start()
                 if len(history) > 10: history = history[-10:]
     finally:
         audio_stream.close(); pa.terminate(); porcupine.delete()

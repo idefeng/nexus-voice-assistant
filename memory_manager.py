@@ -14,6 +14,7 @@ class MemoryManager:
         
         self.client = chromadb.PersistentClient(path=MEMORY_DB_PATH)
         self.collection = self.client.get_or_create_collection(name=MEMORY_COLLECTION_NAME)
+        self.emotion_collection = self.client.get_or_create_collection(name="emotion_history")
 
     def save_memory(self, text, metadata=None):
         """保存一段记忆"""
@@ -45,6 +46,27 @@ class MemoryManager:
         except Exception as e:
             print(f"⚠️ 记忆检索失败: {e}")
             return ""
+
+    def save_emotion(self, emotion):
+        """保存单次情绪记录"""
+        timestamp = datetime.datetime.now().isoformat()
+        import hashlib
+        emo_id = hashlib.md5(f"emo_{timestamp}".encode()).hexdigest()
+        self.emotion_collection.add(
+            documents=[emotion],
+            metadatas=[{"timestamp": timestamp}],
+            ids=[emo_id]
+        )
+
+    def get_recent_emotions(self, limit=5):
+        """获取最近的情绪轨迹"""
+        try:
+            results = self.emotion_collection.get(limit=limit)
+            if results["documents"]:
+                return results["documents"]
+            return []
+        except:
+            return []
 
     def extract_and_save_facts(self, user_text, ai_response):
         """
