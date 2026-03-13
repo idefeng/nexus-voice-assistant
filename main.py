@@ -85,6 +85,28 @@ if ENABLE_EMOTION_ANALYSIS:
     print("😐 加载情绪分析...")
     emotion_session = InferenceSession("./models/emotion.onnx")
     emotion_labels = ['neutral', 'happy', 'surprise', 'sad', 'angry', 'disgust', 'fear', 'contempt']
+    EMOTION_MAP = {
+        'neutral': '平静', 'happy': '愉快', 'surprise': '惊讶', 
+        'sad': '低落', 'angry': '愤怒', 'disgust': '厌恶', 
+        'fear': '恐惧', 'contempt': '轻蔑'
+    }
+
+def calculate_ear(landmarks):
+    """计算眼睛纵横比 (EAR)"""
+    def dist(p1, p2): return np.linalg.norm(p1 - p2)
+    # 左眼关键点 (36-41)
+    l_v1 = dist(landmarks[37], landmarks[41])
+    l_v2 = dist(landmarks[38], landmarks[40])
+    l_h = dist(landmarks[36], landmarks[39])
+    l_ear = (l_v1 + l_v2) / (2.0 * l_h)
+    
+    # 右眼关键点 (42-47)
+    r_v1 = dist(landmarks[43], landmarks[47])
+    r_v2 = dist(landmarks[44], landmarks[46])
+    r_h = dist(landmarks[42], landmarks[45])
+    r_ear = (r_v1 + r_v2) / (2.0 * r_h)
+    
+    return (l_ear + r_ear) / 2.0
 
 print("🔔 初始化唤醒引擎...")
 try:
@@ -131,9 +153,15 @@ def detect_face_and_emotion():
         face_img = face_img.astype(np.float32) / 255.0
         face_img = np.expand_dims(np.expand_dims(face_img, axis=0), axis=0)
         outputs = emotion_session.run(None, {'Input3': face_img})
-        emotion = emotion_labels[np.argmax(outputs[0])]
-        print(f"😐 [感知] 情绪识别结果：{emotion}")
-        return face, emotion, face.normed_embedding
+        raw_emotion = emotion_labels[np.argmax(outputs[0])]
+        emotion = EMOTION_MAP.get(raw_emotion, "未知")
+        
+        # 疲劳计算 (EAR)
+        ear = calculate_ear(face.landmark_3d_68)
+        is_tired = ear < 0.22  # 经验阈值
+        
+        print(f"😐 [感知] 状态识别：{emotion} | EAR: {ear:.2f} {'(疲劳)' if is_tired else ''}")
+        return face, emotion, face.normed_embedding, is_tired
 
 def is_authorized(current_embedding):
     """对比当前人脸与主人特征"""
@@ -153,9 +181,12 @@ def proactive_intelligence_loop():
                 elif r["hour"] != now.hour: r["done"] = False
             
             if time.time() - last_interaction_time > proactive_cooldown:
-                face, _, emb = detect_face_and_emotion()
+                face, emo, emb, tired = detect_face_and_emotion()
                 if face and is_authorized(emb):
-                    if random.random() < 0.3:
+                    if tired:
+                        proactive_type[0] = "fatigue_care"
+                        print("🥱 触发疲劳关怀 (主)")
+                    elif random.random() < 0.3:
                         proactive_type[0] = "screen_insight"
                         print("👁️ 触发主动屏幕洞察 (主)")
                     else:
@@ -222,6 +253,8 @@ def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=
         if is_proactive:
             if p_mode == "screen_insight":
                 sys_p += " 【场景：主动屏幕洞察】请根据截图给主人一条温暖的建议或见解。"
+            elif p_mode == "fatigue_care":
+                sys_p += " 【场景：疲劳关怀】检测到主人看起来很累（眼睛睁不开/打哈欠），请用最温暖的语气劝主人休息一下，比如喝杯咖啡或远眺。"
             else:
                 sys_p += " 【场景：主动问候】打个亲切招呼，带点记忆感。"
         
@@ -295,7 +328,7 @@ class VoiceAssistantApp(rumps.App):
         print("🛠️ 开始执行人脸注册...")
         rumps.notification("小德", "启动注册", "请正对摄像头，识别中...")
         time.sleep(1.5)
-        face, _, emb = detect_face_and_emotion()
+        face, _, emb, _ = detect_face_and_emotion()
         if face is not None:
             np.save(MASTER_FACE_EMBEDDING_PATH, emb)
             global master_embedding
@@ -343,11 +376,11 @@ def run_voice_assistant():
                 global last_interaction_time
                 last_interaction_time = time.time()
                 
-                # 视觉身份/情绪双检 (v6.0.0)
-                face_res = {"face": None, "emotion": "neutral", "emb": None}
+                # 视觉身份/情绪/疲劳检测 (v7.1.0)
+                face_res = {"face": None, "emotion": "平静", "emb": None, "tired": False}
                 def b_vision():
-                    f, e, m = detect_face_and_emotion()
-                    if f: face_res.update({"face": f, "emotion": e, "emb": m})
+                    f, e, m, t = detect_face_and_emotion()
+                    if f: face_res.update({"face": f, "emotion": e, "emb": m, "tired": t})
                 vt = threading.Thread(target=b_vision); vt.start()
                 
                 speak("我在呢 🐻")
