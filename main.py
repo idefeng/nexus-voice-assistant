@@ -61,6 +61,9 @@ if os.path.exists(MASTER_FACE_EMBEDDING_PATH):
     print(f"🔐 已加载主人特征库: {MASTER_FACE_EMBEDDING_PATH}")
     master_embedding = np.load(MASTER_FACE_EMBEDDING_PATH)
 
+# 相机锁 (v6.0.1)
+camera_lock = threading.Lock()
+
 # 初始化模型
 print(f"🔊 加载语音识别 ({WHISPER_MODEL})...")
 whisper_model = whisper.load_model(WHISPER_MODEL)
@@ -95,23 +98,30 @@ audio_stream = pa.open(
 )
 
 def detect_face_and_emotion():
-    """检测人脸并分析情绪，同时返回 embedding"""
-    cap = cv2.VideoCapture(CAMERA_ID)
-    time.sleep(0.1) # 等待摄像头稳定
-    ret, frame = cap.read()
-    cap.release()
-    if not ret: return None, None, None
-    faces = face_analyzer.get(frame)
-    if len(faces) == 0: return None, None, None
-    
-    face = faces[0]
-    face_img = cv2.resize(frame, (64, 64))
-    face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-    face_img = face_img.astype(np.float32) / 255.0
-    face_img = np.expand_dims(np.expand_dims(face_img, axis=0), axis=0)
-    outputs = emotion_session.run(None, {'Input3': face_img})
-    emotion = emotion_labels[np.argmax(outputs[0])]
-    return face, emotion, face.normed_embedding
+    """检测人脸并分析情绪，同时返回 embedding (带锁保护)"""
+    with camera_lock:
+        print("📸 [感知] 正在开启摄像头...")
+        cap = cv2.VideoCapture(CAMERA_ID)
+        time.sleep(0.1)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret: 
+            print("⚠️ [感知] 摄像头读取失败")
+            return None, None, None
+        faces = face_analyzer.get(frame)
+        if len(faces) == 0: 
+            print("⚠️ [感知] 未检测到人脸")
+            return None, None, None
+        
+        face = faces[0]
+        face_img = cv2.resize(frame, (64, 64))
+        face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+        face_img = face_img.astype(np.float32) / 255.0
+        face_img = np.expand_dims(np.expand_dims(face_img, axis=0), axis=0)
+        outputs = emotion_session.run(None, {'Input3': face_img})
+        emotion = emotion_labels[np.argmax(outputs[0])]
+        print(f"😐 [感知] 情绪识别结果：{emotion}")
+        return face, emotion, face.normed_embedding
 
 def is_authorized(current_embedding):
     """对比当前人脸与主人特征"""
@@ -259,15 +269,19 @@ class VoiceAssistantApp(rumps.App):
     def about(self, _): rumps.alert("小德 v6.0.0\n认主关怀版 🐻🛡️💖")
     @rumps.clicked("鉴权注册")
     def register(self, _):
-        rumps.alert("请正面看摄像头，并保持微笑 3 秒...")
-        time.sleep(1)
+        print("🛠️ 开始执行人脸注册...")
+        rumps.notification("小德", "启动注册", "请正对摄像头，识别中...")
+        time.sleep(1.5)
         face, _, emb = detect_face_and_emotion()
-        if face:
+        if face is not None:
             np.save(MASTER_FACE_EMBEDDING_PATH, emb)
             global master_embedding
             master_embedding = emb
             rumps.alert("✅ 认主成功！小德已记住您的面容。")
-        else: rumps.alert("❌ 失败：未检测到人脸，请重试。")
+            print("🔐 主人特征已更新。")
+        else:
+            rumps.alert("❌ 失败：未探测到人脸。请确保光线充足并正对摄像头。")
+            print("⚠️ 注册失败：未探测到有效人脸。")
     @rumps.clicked("重启助手")
     def restart(self, _): os.execv(sys.executable, ['python'] + sys.argv)
 
