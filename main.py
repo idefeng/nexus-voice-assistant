@@ -7,7 +7,6 @@ import pvporcupine
 import pyaudio
 import struct
 import whisper
-import requests
 import cv2
 import numpy as np
 import insightface
@@ -21,21 +20,36 @@ import warnings
 import logging
 import base64
 import json
+import httpx
 from onnxruntime import InferenceSession
+from typing import Optional, Dict, Any, List
 
-# 净化日志
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger("Xiaode")
+
+# 净化第三方库日志
 logging.getLogger("insightface").setLevel(logging.ERROR)
 logging.getLogger("onnxruntime").setLevel(logging.ERROR)
 logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# 日志净化 (v7.0.0)
-def silence_stderr():
-    f = open(os.devnull, 'w')
-    os.dup2(f.fileno(), sys.stderr.fileno())
-
-silence_stderr()
+# 日志净化 (v7.0.0) - 修复系统错误输出
+# 已注释掉，避免干扰日志查看
+# def silence_stderr():
+#     try:
+#         f = open(os.devnull, 'w')
+#         os.dup2(f.fileno(), sys.stderr.fileno())
+#     except Exception as e:
+#         logger.warning(f"无法静默标准错误输出: {e}")
+#
+# silence_stderr()
 
 from config import *
 from memory_manager import memory_manager
@@ -56,57 +70,104 @@ STATUS_SLEEPING = "🌙"
 
 NATURAL_FILLERS = ["嗯...", "我想想...", "好的，我明白了。", "让我想一下。"]
 
-# 全局状态
-is_sleeping = False
-current_speaker_process = [None]
-last_interaction_time = time.time()
-proactive_cooldown = 120 
-proactive_trigger_flag = threading.Event()
-proactive_type = ["greeting"]
-scheduled_reminders = [
-    {"hour": 10, "minute": 30, "msg": "德哥，该喝水休息一下啦 🐻", "done": False},
-    {"hour": 15, "minute": 0, "msg": "下午茶时间到！要不要起来动一动？☕", "done": False},
-    {"hour": 23, "minute": 0, "msg": "太晚了，记得早点休息哦 🌕", "done": False},
-]
+# 全局状态管理
+class AssistantState:
+    def __init__(self):
+        self.is_sleeping = False
+        self.current_speaker_process = None
+        self.last_interaction_time = time.time()
+        self.proactive_cooldown = 120 
+        self.proactive_trigger_flag = asyncio.Event()
+        self.proactive_type = "greeting"
+        self.scheduled_reminders = [
+            {"hour": 10, "minute": 30, "msg": "德哥，该喝水休息一下啦 🐻", "done": False},
+            {"hour": 15, "minute": 0, "msg": "下午茶时间到！要不要起来动一动？☕", "done": False},
+            {"hour": 23, "minute": 0, "msg": "太晚了，记得早点休息哦 🌕", "done": False},
+        ]
+        self.master_embedding = None
+        self.camera_frame = None
+        self.camera_lock = threading.Lock()
+        self.is_running = True
+
+state = AssistantState()
 
 # 加载主人特征
-master_embedding = None
 if os.path.exists(MASTER_FACE_EMBEDDING_PATH):
-    print(f"🔐 已加载主人特征库: {MASTER_FACE_EMBEDDING_PATH}")
-    master_embedding = np.load(MASTER_FACE_EMBEDDING_PATH)
+    try:
+        state.master_embedding = np.load(MASTER_FACE_EMBEDDING_PATH)
+        logger.info(f"🔐 已加载主人特征库: {MASTER_FACE_EMBEDDING_PATH}")
+    except Exception as e:
+        logger.error(f"加载主人特征失败: {e}")
 
-# 相机锁 (v6.0.1)
-camera_lock = threading.Lock()
-
-# 初始化模型
-print(f"🔊 加载语音识别 ({WHISPER_MODEL})...")
+# --- 资源加载 ---
+logger.info(f"🔊 加载语音识别 ({WHISPER_MODEL})...")
 whisper_model = whisper.load_model(WHISPER_MODEL)
 
+face_analyzer = None
 if ENABLE_FACE_RECOGNITION:
-    print("👤 加载人脸识别...")
+    logger.info("👤 加载人脸识别...")
     face_analyzer = insightface.app.FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
     face_analyzer.prepare(ctx_id=0, det_size=(640, 640))
 
+emotion_session = None
+emotion_labels = ['neutral', 'happy', 'surprise', 'sad', 'angry', 'disgust', 'fear', 'contempt']
+EMOTION_MAP = {
+    'neutral': '平静', 'happy': '愉快', 'surprise': '惊讶', 
+    'sad': '低落', 'angry': '愤怒', 'disgust': '厌恶', 
+    'fear': '恐惧', 'contempt': '轻蔑'
+}
 if ENABLE_EMOTION_ANALYSIS:
-    print("😐 加载情绪分析...")
-    emotion_session = InferenceSession("./models/emotion.onnx")
-    emotion_labels = ['neutral', 'happy', 'surprise', 'sad', 'angry', 'disgust', 'fear', 'contempt']
-    EMOTION_MAP = {
-        'neutral': '平静', 'happy': '愉快', 'surprise': '惊讶', 
-        'sad': '低落', 'angry': '愤怒', 'disgust': '厌恶', 
-        'fear': '恐惧', 'contempt': '轻蔑'
-    }
+    logger.info("😐 加载情绪分析...")
+    try:
+        emotion_session = InferenceSession("./models/emotion.onnx")
+    except Exception as e:
+        logger.error(f"加载情绪分析模型失败: {e}")
 
+# --- 背景相机类 ---
+class BackgroundCamera:
+    def __init__(self):
+        self.cap = None
+        self.thread = None
+
+    def start(self):
+        self.thread = threading.Thread(target=self._update_loop, daemon=True)
+        self.thread.start()
+
+    def _update_loop(self):
+        logger.info("📸 [系统] 启动后台相机线程...")
+        while state.is_running:
+            try:
+                if self.cap is None or not self.cap.isOpened():
+                    self.cap = cv2.VideoCapture(CAMERA_ID)
+                    time.sleep(1)
+                
+                ret, frame = self.cap.read()
+                if ret:
+                    with state.camera_lock:
+                        state.camera_frame = frame.copy()
+                else:
+                    logger.warning("相机读取失败，尝试重新连接...")
+                    self.cap.release()
+                    self.cap = None
+                    time.sleep(2)
+            except Exception as e:
+                logger.error(f"相机线程异常: {e}")
+                time.sleep(5)
+            time.sleep(0.1) # 10 FPS 足够了
+
+bg_camera = BackgroundCamera()
+if ENABLE_FACE_RECOGNITION:
+    bg_camera.start()
+
+# --- 视觉与感知函数 ---
 def calculate_ear(landmarks):
     """计算眼睛纵横比 (EAR)"""
     def dist(p1, p2): return np.linalg.norm(p1 - p2)
-    # 左眼关键点 (36-41)
     l_v1 = dist(landmarks[37], landmarks[41])
     l_v2 = dist(landmarks[38], landmarks[40])
     l_h = dist(landmarks[36], landmarks[39])
     l_ear = (l_v1 + l_v2) / (2.0 * l_h)
     
-    # 右眼关键点 (42-47)
     r_v1 = dist(landmarks[43], landmarks[47])
     r_v2 = dist(landmarks[44], landmarks[46])
     r_h = dist(landmarks[42], landmarks[45])
@@ -114,14 +175,59 @@ def calculate_ear(landmarks):
     
     return (l_ear + r_ear) / 2.0
 
-print("🔔 初始化唤醒引擎...")
+def detect_face_and_emotion():
+    """从背景帧检测人脸并分析情绪"""
+    with state.camera_lock:
+        if state.camera_frame is None:
+            return None, None, None, False
+        frame = state.camera_frame.copy()
+
+    try:
+        faces = face_analyzer.get(frame)
+        if len(faces) == 0: 
+            ui.update_state({"emotion": ""})
+            return None, None, None, False
+        
+        face = faces[0]
+        emotion = "平静"
+        if emotion_session:
+            face_img = cv2.resize(frame, (64, 64))
+            face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+            face_img = face_img.astype(np.float32) / 255.0
+            face_img = np.expand_dims(np.expand_dims(face_img, axis=0), axis=0)
+            outputs = emotion_session.run(None, {'Input3': face_img})
+            raw_emotion = emotion_labels[np.argmax(outputs[0])]
+            emotion = EMOTION_MAP.get(raw_emotion, "未知")
+        
+        ear = calculate_ear(face.landmark_3d_68)
+        is_tired = ear < 0.22
+        
+        display_text = f"{emotion}" + (" (疲劳)" if is_tired else "")
+        ui.update_state({"emotion": display_text})
+        
+        logger.info(f"😐 [感知] 状态识别：{emotion} | EAR: {ear:.2f} {'(疲劳)' if is_tired else ''}")
+        return face, emotion, face.normed_embedding, is_tired
+    except Exception as e:
+        logger.error(f"人脸分析异常: {e}")
+        return None, None, None, False
+
+def is_authorized(current_embedding):
+    """对比当前人脸与主人特征"""
+    if state.master_embedding is None: return True
+    sim = np.dot(state.master_embedding, current_embedding)
+    logger.info(f"🔍 身份认证相似度: {sim:.2f}")
+    return sim > FACE_SIMILARITY_THRESHOLD
+
+# --- 音频与识别 ---
+logger.info("🔔 初始化唤醒引擎...")
 try:
     porcupine = pvporcupine.create(
         access_key=PORCUPINE_ACCESS_KEY,
         keyword_paths=[WAKE_WORD_PATH],
         model_path=PORCUPINE_MODEL_PATH
     )
-except:
+except Exception as e:
+    logger.warning(f"无法加载自定义唤醒词，尝试默认模式: {e}")
     porcupine = pvporcupine.create(access_key=PORCUPINE_ACCESS_KEY, keywords=['picovoice'])
 
 pa = pyaudio.PyAudio()
@@ -134,135 +240,73 @@ try:
         frames_per_buffer=porcupine.frame_length
     )
 except Exception as e:
-    print(f"❌ 无法启动音频流: {e}")
+    logger.error(f"❌ 无法启动音频流: {e}")
     sys.exit(1)
 
-def detect_face_and_emotion():
-    """检测人脸并分析情绪，同时返回 embedding (带锁保护)"""
-    with camera_lock:
-        print("📸 [感知] 正在开启摄像头...")
-        cap = cv2.VideoCapture(CAMERA_ID)
-        time.sleep(0.1)
-        ret, frame = cap.read()
-        cap.release()
-        if not ret: 
-            print("⚠️ [感知] 摄像头读取失败")
-            return None, None, None, False
-        faces = face_analyzer.get(frame)
-        if len(faces) == 0: 
-            print("⚠️ [感知] 未检测到人脸")
-            return None, None, None, False
-        
-        face = faces[0]
-        face_img = cv2.resize(frame, (64, 64))
-        face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-        face_img = face_img.astype(np.float32) / 255.0
-        face_img = np.expand_dims(np.expand_dims(face_img, axis=0), axis=0)
-        outputs = emotion_session.run(None, {'Input3': face_img})
-        raw_emotion = emotion_labels[np.argmax(outputs[0])]
-        emotion = EMOTION_MAP.get(raw_emotion, "未知")
-        
-        # 疲劳计算 (EAR)
-        ear = calculate_ear(face.landmark_3d_68)
-        is_tired = ear < 0.22  # 经验阈值
-        
-        print(f"😐 [感知] 状态识别：{emotion} | EAR: {ear:.2f} {'(疲劳)' if is_tired else ''}")
-        return face, emotion, face.normed_embedding, is_tired
-
-def is_authorized(current_embedding):
-    """对比当前人脸与主人特征"""
-    if master_embedding is None: return True # 如果没注册，默认开放
-    sim = np.dot(master_embedding, current_embedding)
-    print(f"🔍 身份认证相似度: {sim:.2f}")
-    return sim > FACE_SIMILARITY_THRESHOLD
-
-def proactive_intelligence_loop():
-    global last_interaction_time
-    while True:
-        if is_sleeping:
-            time.sleep(5)
-            continue
-        try:
-            now = datetime.datetime.now()
-            for r in scheduled_reminders:
-                if r["hour"] == now.hour and r["minute"] == now.minute and not r["done"]:
-                    speak(r["msg"]); r["done"] = True
-                elif r["hour"] != now.hour: r["done"] = False
-            
-            if time.time() - last_interaction_time > proactive_cooldown:
-                face, emo, emb, tired = detect_face_and_emotion()
-                if face and is_authorized(emb):
-                    if tired:
-                        proactive_type[0] = "fatigue_care"
-                        print("🥱 触发疲劳关怀 (主)")
-                    elif random.random() < 0.3:
-                        proactive_type[0] = "screen_insight"
-                        print("👁️ 触发主动屏幕洞察 (主)")
-                    else:
-                        proactive_type[0] = "greeting"
-                        print("👋 触发主动问候 (主)")
-                    proactive_trigger_flag.set()
-                    last_interaction_time = time.time()
-            time.sleep(10)
-        except: time.sleep(10)
-
-def record_audio(max_duration, is_follow_up=False):
+async def record_audio(max_duration, is_follow_up=False):
     frames = []
     CHUNK_SIZE = porcupine.frame_length
     SILENCE_THRESHOLD = 500
     SILENCE_DURATION = 0.8 if is_follow_up else 1.2
     
-    # 特殊逻辑：如果是连续对话，起始静音判定需要极短
     limit = int(porcupine.sample_rate / CHUNK_SIZE * SILENCE_DURATION)
     total_timeout = int(porcupine.sample_rate / CHUNK_SIZE * (FOLLOW_UP_TIMEOUT if is_follow_up else max_duration))
     
     counter, recorded = 0, 0
     while recorded < total_timeout:
         try:
-            data = audio_stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            # 使用 to_thread 避免阻塞事件循环
+            data = await asyncio.to_thread(audio_stream.read, CHUNK_SIZE, exception_on_overflow=False)
             frames.append(data); recorded += 1
             energy = np.abs(struct.unpack_from("h" * CHUNK_SIZE, data)).mean()
             if energy < SILENCE_THRESHOLD: counter += 1
             else: counter = 0
             
-            # 连续对话特殊逻辑：如果一开始就长时间静音，提前结束
             if is_follow_up and recorded > int(porcupine.sample_rate / CHUNK_SIZE * 3.0) and counter == recorded:
-                return None # 表示没有追问
+                return None 
 
             if recorded > int(porcupine.sample_rate / CHUNK_SIZE * 0.5) and counter > limit: break
         except Exception as e:
-            print(f"⚠️ 录音读取中断: {e}")
+            logger.warning(f"⚠️ 录音读取中断: {e}")
             break
     return b''.join(frames)
 
-def audio_to_text(audio_data):
+async def audio_to_text(audio_data):
     ui.title = STATUS_THINKING
     wf = f"/tmp/r_{random.randint(0,99)}.wav"
     import wave
-    with wave.open(wf, 'wb') as f:
-        f.setnchannels(CHANNELS); f.setsampwidth(pa.get_sample_size(pyaudio.paInt16))
-        f.setframerate(porcupine.sample_rate); f.writeframes(audio_data)
     try:
-        with torch.no_grad(): res = whisper_model.transcribe(wf, language="zh")
-        os.remove(wf)
-        text = res["text"].strip()
-        return text
-    except:
-        if os.path.exists(wf): os.remove(wf)
+        def save_wav():
+            with wave.open(wf, 'wb') as f:
+                f.setnchannels(CHANNELS); f.setsampwidth(pa.get_sample_size(pyaudio.paInt16))
+                f.setframerate(porcupine.sample_rate); f.writeframes(audio_data)
+        
+        await asyncio.to_thread(save_wav)
+        
+        def transcribe():
+            with torch.no_grad(): 
+                return whisper_model.transcribe(wf, language="zh")
+        
+        res = await asyncio.to_thread(transcribe)
+        return res["text"].strip()
+    except Exception as e:
+        logger.error(f"语音识别异常: {e}")
         return ""
+    finally:
+        if os.path.exists(wf): os.remove(wf)
 
-# --- 工具集定义 (v8.0.0) ---
+# --- 工具与 AI 交互 ---
 TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
             "name": "get_sports_data",
-            "description": "获取用户的运动健身数据（如跑量、最近活动等）",
+            "description": "获取用户的运动健身数据",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "type": {"type": "string", "enum": ["latest", "monthly"], "description": "报表类型"},
-                    "month": {"type": "string", "description": "目标月份 (YYYY-MM)"}
+                    "type": {"type": "string", "enum": ["latest", "monthly"]},
+                    "month": {"type": "string"}
                 },
                 "required": ["type"]
             }
@@ -272,7 +316,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "get_health_data",
-            "description": "获取用户的健康/睡眠质量数据",
+            "description": "获取用户的健康/睡眠数据",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -281,240 +325,241 @@ TOOLS_SCHEMA = [
                 "required": ["category"]
             }
         }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_todo_tasks",
-            "description": "获取用户的待办事项或重要安排",
-            "parameters": {"type": "object", "properties": {}}
-        }
     }
 ]
 
-def execute_tool(name, args):
-    """本地工具执行环境 (v8.0.0)"""
-    print(f"🛠️ [工具执行] {name}({args})")
+async def execute_tool_async(name, args):
+    logger.info(f"🛠️ [工具执行] {name}({args})")
+    ui.update_state({"status": STATUS_ACTION, "response": f"🛠️ 正在执行工具: {name}..."})
     try:
-        if name == "get_sports_data":
-            t, m = args.get("type"), args.get("month", "")
-            base = "http://localhost:8000/api/v1/agent/"
-            path = "latest_activity" if t == "latest" else "monthly_report"
-            r = requests.get(f"{base}{path}", params={"target_month": m}, timeout=10)
-            return r.json().get("report", "暂时没能获取到运动详情。")
-        elif name == "get_health_data":
-            return "根据最近监测，你昨晚深度睡眠达标，建议今天继续保持规律作息。"
-        elif name == "get_todo_tasks":
-            return "你明天有以下安排：1. 10:00 研发会议；2. 下午周报提交；3. 晚上 5 公里慢跑。"
-        return f"错误：未定义的工具 {name}"
+        async with httpx.AsyncClient() as client:
+            if name == "get_sports_data":
+                t, m = args.get("type"), args.get("month", "")
+                base = "http://localhost:8000/api/v1/agent/"
+                path = "latest_activity" if t == "latest" else "monthly_report"
+                r = await client.get(f"{base}{path}", params={"target_month": m}, timeout=10)
+                res = r.json().get("report", "暂时没能获取到运动详情。")
+                ui.update_state({"status": STATUS_THINKING, "response": "✅ 成功获取数据，正在整理..."})
+                return res
+            elif name == "get_health_data":
+                return "根据最近监测，你昨晚深度睡眠达标，建议今天继续保持规律作息。"
+            return f"错误：未定义的工具 {name}"
     except Exception as e:
+        logger.error(f"工具执行失败: {e}")
+        ui.update_state({"status": STATUS_THINKING, "response": f"❌ 工具执行失败: {str(e)}"})
         return f"API 访问失败: {str(e)}"
 
-def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=False, p_mode="greeting", is_tired=False):
+async def call_openclaw_async(text, emotion=None, image_path=None, history=[], is_proactive=False, p_mode="greeting", is_tired=False):
     ui.title = STATUS_THINKING
     ui.update_state({"transcription": text, "response": ""})
     try:
         mem = ""
         if not history and ENABLE_MEMORY and memory_manager:
-            mem = memory_manager.query_memory(text)
+            mem = await asyncio.to_thread(memory_manager.query_memory, text)
         
-        vibe = "俏皮、温馨、充满智慧、深度体贴"
         sys_p = (
-            f"你叫小德 (Xiaode) 🐻。你是一个全能的私人智能助理。你的风格是：{vibe}。"
-            "你可以通过工具直接访问用户的[运动]、[睡眠]和[待办]数据。"
-            "当用户问到相关话题时，请【必须】先执行工具查询再汇报结果。"
+            f"你叫小德 (Xiaode) 🐻。你是一个智能助手。风格：俏皮、温馨、深度体贴。"
+            f"\n【实时场景】用户正在使用: {get_active_window_info()}"
         )
-        
-        if emotion == 'angry': sys_p += "\n【反馈】用户愤怒，请多包容。"
-        elif emotion == 'sad': sys_p += "\n【反馈】用户低落，给予鼓励。"
-        if is_tired or p_mode == "fatigue_care":
-            sys_p += "\n【生理状态】检测到用户疲劳。务必显式提及并关怀。"
-            
-        sys_p += f"\n【实时场景】用户正在使用: {get_active_window_info()}"
         if mem: sys_p += f"\n【历史背景】{mem}"
+        if emotion: sys_p += f"\n【当前情绪】{emotion}"
+        if is_tired or p_mode == "fatigue_care": sys_p += "\n【生理状态】检测到用户疲劳，请给予关心。"
         
         user_msg = []
         if image_path:
-            b64 = base64.b64encode(open(image_path, "rb").read()).decode('utf-8')
-            user_msg.append({"type": "text", "text": text})
-            user_msg.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+            with open(image_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode('utf-8')
+            user_msg = [
+                {"type": "text", "text": text},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+            ]
         
         msgs = [{"role": "system", "content": sys_p}] + history
         msgs.append({"role": "user", "content": user_msg if user_msg else text})
         
-        for _ in range(5):
-            r = requests.post(OPENCLAW_API_URL, json={
-                "model": f"{OPENCLAW_CHANNEL}/{OPENCLAW_ACCOUNT}/{OPENCLAW_AGENT}",
-                "messages": msgs, "tools": TOOLS_SCHEMA
-            }, headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"}, timeout=60)
-            
-            if r.status_code != 200: return {"type": "error", "content": f"API 响应异常 ({r.status_code})"}
-            
-            msg = r.json()["choices"][0]["message"]
-            msgs.append(msg)
-            
-            if not msg.get("tool_calls"):
-                content = msg.get("content", "")
-                ui.update_state({"response": content})
-                return {"type": "text", "content": content}
-            
-            for call in msg["tool_calls"]:
-                name, tid = call["function"]["name"], call["id"]
-                args = json.loads(call["function"]["arguments"])
-                result = execute_tool(name, args)
-                msgs.append({"role": "tool", "tool_call_id": tid, "name": name, "content": str(result)})
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for _ in range(5):
+                r = await client.post(OPENCLAW_API_URL, json={
+                    "model": f"{OPENCLAW_CHANNEL}/{OPENCLAW_ACCOUNT}/{OPENCLAW_AGENT}",
+                    "messages": msgs, "tools": TOOLS_SCHEMA
+                }, headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"})
+                
+                if r.status_code != 200: 
+                    return {"type": "error", "content": f"API 响应异常 ({r.status_code})"}
+                
+                msg = r.json()["choices"][0]["message"]
+                msgs.append(msg)
+                
+                if not msg.get("tool_calls"):
+                    content = msg.get("content", "")
+                    ui.update_state({"response": content})
+                    return {"type": "text", "content": content}
+                
+                for call in msg["tool_calls"]:
+                    name = call["function"]["name"]
+                    args = json.loads(call["function"]["arguments"])
+                    result = await execute_tool_async(name, args)
+                    msgs.append({"role": "tool", "tool_call_id": call["id"], "name": name, "content": str(result)})
         
-        return {"type": "text", "content": "我的大脑想得太多了，稍微休息一下吧。"}
-    except Exception as e: return {"type": "error", "content": str(e)}
+        return {"type": "text", "content": "大脑过载了..."}
+    except Exception as e:
+        logger.error(f"AI 调用异常: {e}")
+        return {"type": "error", "content": str(e)}
 
-async def _stream_speak(text):
+# --- TTS ---
+async def _stream_speak_async(text):
     if not text or not text.strip(): return
     try:
         communicate = edge_tts.Communicate(text, TTS_VOICE)
-        proc = subprocess.Popen(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-i", "pipe:0"], stdin=subprocess.PIPE)
-        current_speaker_process[0] = proc
+        proc = await asyncio.create_subprocess_exec(
+            "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-i", "pipe:0",
+            stdin=subprocess.PIPE
+        )
+        state.current_speaker_process = proc
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
-                try: proc.stdin.write(chunk["data"])
+                try: 
+                    proc.stdin.write(chunk["data"])
+                    await proc.stdin.drain()
                 except: break
         if proc.stdin: proc.stdin.close()
-        proc.wait(); current_speaker_process[0] = None
-    except: pass
+        await proc.wait()
+        state.current_speaker_process = None
+    except Exception as e:
+        logger.warning(f"TTS 播放失败: {e}")
 
-def speak(text, with_filler=False):
+async def speak_async(text, with_filler=False):
     if not text or not text.strip(): return
     ui.title = STATUS_SPEAKING
-    if current_speaker_process[0] and current_speaker_process[0].poll() is None:
-        current_speaker_process[0].terminate()
+    if state.current_speaker_process:
+        try: state.current_speaker_process.terminate()
+        except: pass
+    
     if with_filler and random.random() < 0.3:
-        asyncio.run(_stream_speak(random.choice(NATURAL_FILLERS)))
+        await _stream_speak_async(random.choice(NATURAL_FILLERS))
+    
     import re
     segs = [s.strip() for s in re.split(r'([。！？\n])', text) if s.strip()]
     for seg in segs or [text]:
         clean = re.sub(r'#+\s*|[*_\-]{1,3}|[`>]|\[([^\]]+)\]\([^\)]+\)|[\U00010000-\U0010ffff]', '', seg)
-        if clean.strip(): asyncio.run(_stream_speak(clean.strip()))
+        if clean.strip(): await _stream_speak_async(clean.strip())
     ui.title = STATUS_IDLE
 
-class VoiceAssistantApp(rumps.App):
-    def __init__(self):
-        super(VoiceAssistantApp, self).__init__("小德", title=STATUS_IDLE)
-        self.menu = ["关于小德", "鉴权注册", "重启助手"]
-    @rumps.clicked("关于小德")
-    def about(self, _): rumps.alert("小德 v6.0.0\n认主关怀版 🐻🛡️💖")
-    @rumps.clicked("鉴权注册")
-    def register(self, _):
-        print("🛠️ 开始执行人脸注册...")
-        rumps.notification("小德", "启动注册", "请正对摄像头，识别中...")
-        time.sleep(1.5)
-        face, _, emb, _ = detect_face_and_emotion()
-        if face is not None:
-            np.save(MASTER_FACE_EMBEDDING_PATH, emb)
-            global master_embedding
-            master_embedding = emb
-            rumps.alert("✅ 认主成功！小德已记住您的面容。")
-            print("🔐 主人特征已更新。")
-        else:
-            rumps.alert("❌ 失败：未探测到人脸。请确保光线充足并正对摄像头。")
-            print("⚠️ 注册失败：未探测到有效人脸。")
-    @rumps.clicked("重启助手")
-    def restart(self, _): os.execv(sys.executable, ['python'] + sys.argv)
+# --- 主逻辑循环 ---
+async def proactive_loop():
+    while state.is_running:
+        if state.is_sleeping:
+            await asyncio.sleep(5)
+            continue
+        try:
+            now = datetime.datetime.now()
+            for r in state.scheduled_reminders:
+                if r["hour"] == now.hour and r["minute"] == now.minute and not r["done"]:
+                    await speak_async(r["msg"])
+                    r["done"] = True
+                elif r["hour"] != now.hour: r["done"] = False
+            
+            if time.time() - state.last_interaction_time > state.proactive_cooldown:
+                face, emo, emb, tired = detect_face_and_emotion()
+                if face and is_authorized(emb):
+                    if tired: state.proactive_type = "fatigue_care"
+                    elif random.random() < 0.3: state.proactive_type = "screen_insight"
+                    else: state.proactive_type = "greeting"
+                    state.proactive_trigger_flag.set()
+                    state.last_interaction_time = time.time()
+        except Exception as e:
+            logger.error(f"主动逻辑异常: {e}")
+        await asyncio.sleep(10)
 
-def run_voice_assistant():
-    global is_sleeping
+async def emotion_update_loop():
+    """专门用于实时刷新 UI 上的情绪显示"""
+    while state.is_running:
+        if not state.is_sleeping:
+            try:
+                # 仅在非休眠状态下高频刷新情绪
+                await asyncio.to_thread(detect_face_and_emotion)
+            except Exception as e:
+                logger.error(f"情绪更新循环异常: {e}")
+        await asyncio.sleep(2.0)
+
+async def main_loop():
     history = []
-    print("✅ 小德 v7.3.1 (Hotfix) 已就绪...")
-    threading.Thread(target=proactive_intelligence_loop, daemon=True).start()
-    
     follow_up = False 
+    logger.info("✅ 小德 v9.1.1 (Dynamic-Emotion) 已就绪...")
     
-    try:
-        while True:
-            if proactive_trigger_flag.is_set():
+    asyncio.create_task(proactive_loop())
+    asyncio.create_task(emotion_update_loop())
+
+    while state.is_running:
+        try:
+            # 检查主动触发
+            if state.proactive_trigger_flag.is_set():
                 follow_up = False
-                proactive_trigger_flag.clear()
-                mode = proactive_type[0]
+                state.proactive_trigger_flag.clear()
+                mode = state.proactive_type
                 i_p = "/tmp/p_s.png" if mode == "screen_insight" else None
-                if i_p: 
-                    subprocess.run(["screencapture", "-x", i_p])
-                res = call_openclaw("打个招呼吧", is_proactive=True, p_mode=mode, image_path=i_p)
+                if i_p: subprocess.run(["screencapture", "-x", i_p])
+                res = await call_openclaw_async("小德想跟你打个招呼", is_proactive=True, p_mode=mode, image_path=i_p)
                 if res["type"] == "text":
-                    print(f"🐻 小德 (主动): {res['content']}")
-                    speak(res["content"])
+                    logger.info(f"🐻 小德 (主动): {res['content']}")
+                    await speak_async(res["content"])
                 if i_p and os.path.exists(i_p): os.remove(i_p)
                 continue
 
+            # 唤醒词检测
             is_triggered = False
             if not follow_up:
-                # 检查唤醒词
-                try:
-                    pcm_data = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
-                except OSError as e:
-                    if e.errno == -9981 or "Unknown Error" in str(e):
-                        time.sleep(0.1); continue
-                    raise e
+                pcm_data = await asyncio.to_thread(audio_stream.read, porcupine.frame_length, exception_on_overflow=False)
                 pcm = struct.unpack_from("h" * porcupine.frame_length, pcm_data)
                 is_triggered = porcupine.process(pcm) >= 0
-                
-                # 如果是唤醒触发，解除休眠 (v7.3.0)
-                if is_triggered and is_sleeping:
-                    is_sleeping = False
-                    print("🌅 小德已被唤醒，正在解除休眠...")
+                if is_triggered and state.is_sleeping:
+                    state.is_sleeping = False
+                    logger.info("🌅 解除休眠...")
                     ui.title = STATUS_IDLE
             else:
                 is_triggered = True
 
             if is_triggered:
-                global last_interaction_time
-                last_interaction_time = time.time()
+                state.last_interaction_time = time.time()
+                # 视觉感知并行
+                face_info = await asyncio.to_thread(detect_face_and_emotion)
+                face, emo, emb, tired = face_info
                 
-                face_res = {"face": None, "emotion": "平静", "emb": None, "tired": False}
-                def b_vision():
-                    f, e, m, t = detect_face_and_emotion()
-                    if f: face_res.update({"face": f, "emotion": e, "emb": m, "tired": t})
-                vt = threading.Thread(target=b_vision); vt.start()
-                
-                if not follow_up:
-                    speak("我在呢 🐻")
+                # 鉴权
+                if state.master_embedding is not None:
+                    if emb is None or not is_authorized(emb):
+                        logger.warning("🚫 鉴权未通过")
+                        ui.title = STATUS_LOCKED
+                        await asyncio.sleep(2)
+                        follow_up = False; continue
+
+                if not follow_up: await speak_async("我在呢 🐻")
                 
                 ui.title = STATUS_LISTENING
                 ui.update_state({"transcription": "正在倾听...", "response": ""})
-                audio = record_audio(MAX_RECORD_SECONDS, is_follow_up=follow_up)
+                audio = await record_audio(MAX_RECORD_SECONDS, is_follow_up=follow_up)
                 if audio is None: 
                     follow_up = False; ui.title = STATUS_IDLE; continue
                 
-                text = audio_to_text(audio)
+                text = await audio_to_text(audio)
                 if not text or not text.strip(): 
                     follow_up = False; ui.title = STATUS_IDLE; continue
                 
-                vt.join(timeout=1.5)
-                # 鉴权逻辑
-                if master_embedding is not None:
-                    if face_res["emb"] is None or not is_authorized(face_res["emb"]):
-                        print("🚫 身份验证未通过，拒绝交互。")
-                        ui.title = STATUS_LOCKED
-                        follow_up = False; continue
-                
-                print(f"👤 你说：{text}")
-                
-                # 休眠指令识别 (v7.3.0)
-                sleep_keywords = ["待机", "退出", "你先等等", "睡觉吧", "休眠", "退下"]
-                if any(k in text for k in sleep_keywords):
-                    is_sleeping = True
+                # 休眠判定
+                if any(k in text for k in ["待机", "睡觉", "退下"]):
+                    state.is_sleeping = True
                     ui.title = STATUS_SLEEPING
-                    follow_up = False
-                    print("🌙 小德进入休眠状态。静默感知已开启。")
-                    continue
+                    follow_up = False; continue
 
-                i_p = "/tmp/s.png" if any(k in text for k in ["看下屏幕", "内容", "分析"]) else None
-                if i_p: 
-                    print("📸 [动作] 正在获取屏幕快照...")
-                    subprocess.run(["screencapture", "-x", i_p])
+                i_p = "/tmp/s.png" if any(k in text for k in ["看下屏幕", "分析"]) else None
+                if i_p: subprocess.run(["screencapture", "-x", i_p])
                 
-                res = call_openclaw(text, face_res['emotion'], i_p, history, is_tired=face_res['tired'])
+                res = await call_openclaw_async(text, emo, i_p, history, is_tired=tired)
                 if res["type"] == "text":
-                    print(f"🐻 小德：{res['content']}")
-                    speak(res["content"], with_filler=True)
-                    history.extend([{"role": "user", "content": text}, {"role": "assistant", "content": res["content"]}])
+                    logger.info(f"🐻 小德：{res['content']}")
+                    await speak_async(res["content"], with_filler=True)
+                    history.append({"role": "user", "content": text})
+                    history.append({"role": "assistant", "content": res["content"]})
                     follow_up = True
                     ui.title = "👂"
                 else:
@@ -522,26 +567,40 @@ def run_voice_assistant():
                 
                 if i_p and os.path.exists(i_p): os.remove(i_p)
                 if ENABLE_MEMORY and memory_manager:
-                    memory_manager.save_emotion(face_res['emotion'])
-                    threading.Thread(target=memory_manager.extract_and_save_facts, args=(text, str(res)), daemon=True).start()
+                    asyncio.create_task(asyncio.to_thread(memory_manager.extract_and_save_facts, text, res.get("content", "")))
+                
                 if len(history) > 10: history = history[-10:]
-    finally:
-        audio_stream.close(); pa.terminate(); porcupine.delete()
+            
+            await asyncio.sleep(0.01)
+        except Exception as e:
+            logger.error(f"主循环异常: {e}")
+            await asyncio.sleep(1)
+
+# --- 启动器 ---
+class VoiceAssistantApp(rumps.App):
+    def __init__(self):
+        super(VoiceAssistantApp, self).__init__("小德", title=STATUS_IDLE)
+    @rumps.clicked("鉴权注册")
+    def register(self, _):
+        face, _, emb, _ = detect_face_and_emotion()
+        if face:
+            np.save(MASTER_FACE_EMBEDDING_PATH, emb)
+            state.master_embedding = emb
+            rumps.alert("✅ 认主成功！")
+        else:
+            rumps.alert("❌ 失败：未探测到人脸。")
+
+def start_assistant():
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main_loop())
+    except Exception as e:
+        logger.critical(f"助手启动失败: {e}")
 
 if __name__ == "__main__":
-    if ENABLE_UI:
-        if UI_TYPE == "flet":
-            print("🚀 正在启动 Flet UI...")
-            threading.Thread(target=run_voice_assistant, daemon=True).start()
-            start_flet_ui(ui.state_queue)
-            sys.exit(0)
-        elif UI_TYPE == "rumps":
-            print("🚀 正在启动 Rumps UI...")
-            app = VoiceAssistantApp()
-            ui.set_ui_instance(app)
-            threading.Thread(target=run_voice_assistant, daemon=True).start()
-            app.run()
-            sys.exit(0)
-
-    print("🚀 正在启动纯命令行模式...")
-    run_voice_assistant()
+    if ENABLE_UI and UI_TYPE == "flet":
+        threading.Thread(target=start_assistant, daemon=True).start()
+        start_flet_ui(ui.state_queue)
+    else:
+        asyncio.run(main_loop())

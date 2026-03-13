@@ -12,6 +12,7 @@ class FletUI:
         self.status_text = None
         self.transcription_text = None
         self.response_text = None
+        self.emotion_text = None
         self.is_running = True
 
     def run(self):
@@ -37,6 +38,9 @@ class FletUI:
         
         # AI 回复文本
         self.response_text = ft.Text("", size=18, color="white")
+        
+        # 情绪显示
+        self.emotion_text = ft.Text("", size=14, color="pink300", weight=FontWeight.W_500)
 
         # 布局
         page.add(
@@ -46,6 +50,7 @@ class FletUI:
                         ft.Divider(height=20, color="transparent"),
                         ft.Row([self.status_icon], alignment=ft.MainAxisAlignment.CENTER),
                         ft.Row([self.status_text], alignment=ft.MainAxisAlignment.CENTER),
+                        ft.Row([self.emotion_text], alignment=ft.MainAxisAlignment.CENTER),
                         ft.Divider(height=20),
                         ft.Column([
                             ft.Text("你:", size=14, color="grey500"),
@@ -74,6 +79,7 @@ class FletUI:
         while self.is_running:
             try:
                 state = self.state_queue.get(timeout=0.1)
+                # print(f"DEBUG: UI Recv State: {state}") # 开发调试
                 if "status" in state:
                     self.update_ui_status(state["status"])
                 if "transcription" in state:
@@ -82,12 +88,15 @@ class FletUI:
                     self.response_text.value = state["response"]
                 if "append_response" in state:
                     self.response_text.value += state["append_response"]
+                if "emotion" in state:
+                    self.emotion_text.value = f"当前的你：{state['emotion']}" if state['emotion'] else ""
                 
                 self.page.update()
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"UI Update Error: {e}")
+                # print(f"UI Update Error: {e}")
+                continue
 
     def update_ui_status(self, status):
         self.status_icon.value = status

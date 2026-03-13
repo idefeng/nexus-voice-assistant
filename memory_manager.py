@@ -3,8 +3,11 @@ from chromadb.config import Settings
 import os
 import json
 import datetime
-import requests
+import httpx
+import logging
 from config import MEMORY_DB_PATH, MEMORY_COLLECTION_NAME, OPENCLAW_API_URL, OPENCLAW_TOKEN, SESSION_KEY
+
+logger = logging.getLogger("MemoryManager")
 
 class MemoryManager:
     def __init__(self):
@@ -31,7 +34,7 @@ class MemoryManager:
             metadatas=[metadata],
             ids=[mem_id]
         )
-        print(f"📦 记忆已存入: {text[:50]}...")
+        logger.info(f"📦 记忆已存入: {text[:50]}...")
 
     def query_memory(self, text, n_results=3):
         """检索相关记忆"""
@@ -44,7 +47,7 @@ class MemoryManager:
                 return "\n".join(results["documents"][0])
             return ""
         except Exception as e:
-            print(f"⚠️ 记忆检索失败: {e}")
+            logger.error(f"⚠️ 记忆检索失败: {e}")
             return ""
 
     def save_emotion(self, emotion):
@@ -65,13 +68,14 @@ class MemoryManager:
             if results["documents"]:
                 return results["documents"]
             return []
-        except:
+        except Exception as e:
+            logger.warning(f"获取情绪历史失败: {e}")
             return []
 
     def extract_and_save_facts(self, user_text, ai_response):
         """
         利用 LLM 从对话中提取事实并保存。
-        这是一个辅助方法，通常在后台运行。
+        同步包装器，适配 asyncio.to_thread
         """
         prompt = f"""
         从以下对话中提取关于用户的持久性事实或偏好（如性格、工作、喜好、技术栈等）。
@@ -96,18 +100,20 @@ class MemoryManager:
                     {"role": "user", "content": prompt}
                 ]
             }
-            response = requests.post(OPENCLAW_API_URL, json=payload, headers=headers, timeout=30)
-            if response.status_code == 200:
-                content = response.json()["choices"][0]["message"]["content"].strip()
-                if content != "NONE" and len(content) > 2:
-                    facts = content.split("\n")
-                    for fact in facts:
-                        if fact.strip():
-                            self.save_memory(fact.strip(), {"type": "user_fact"})
-            else:
-                print(f"⚠️ 事实提取失败: {response.status_code}")
+            # 虽然主逻辑是异步，但因为此函数被 to_thread 调用，这里使用同步库或简单 httpx 同步调用
+            with httpx.Client(timeout=30) as client:
+                response = client.post(OPENCLAW_API_URL, json=payload, headers=headers)
+                if response.status_code == 200:
+                    content = response.json()["choices"][0]["message"]["content"].strip()
+                    if content != "NONE" and len(content) > 2:
+                        facts = content.split("\n")
+                        for fact in facts:
+                            if fact.strip():
+                                self.save_memory(fact.strip(), {"type": "user_fact"})
+                else:
+                    logger.warning(f"⚠️ 事实提取失败: {response.status_code}")
         except Exception as e:
-            print(f"⚠️ 事实提取异常: {e}")
+            logger.error(f"⚠️ 事实提取异常: {e}")
 
 # 全局单例
 if os.environ.get("ENABLE_MEMORY", "True") == "True":
