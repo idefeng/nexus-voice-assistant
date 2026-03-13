@@ -19,6 +19,7 @@ import torch
 import warnings
 import logging
 import base64
+import json
 from onnxruntime import InferenceSession
 
 # 净化日志：屏蔽冗余输出、FutureWarning 和下载进度条
@@ -36,6 +37,7 @@ STATUS_IDLE = "💤"
 STATUS_LISTENING = "🎙️"
 STATUS_THINKING = "🤔"
 STATUS_SPEAKING = "🗣️"
+STATUS_ACTION = "⚙️"
 
 # 自然语气词
 NATURAL_FILLERS = ["嗯...", "我想想...", "好的，我明白了。", "原来是这样。", "让我想一下。"]
@@ -68,12 +70,8 @@ try:
         model_path=PORCUPINE_MODEL_PATH
     )
 except Exception as e:
-    print(f"⚠️ 无法加载自定义唤醒词 {WAKE_WORD_PATH}: {e}")
-    print("💡 尝试使用内置唤醒词 'picovoice' (请改喊 'Picovoice' 唤醒)")
-    porcupine = pvporcupine.create(
-        access_key=PORCUPINE_ACCESS_KEY,
-        keywords=['picovoice']
-    )
+    print(f"⚠️ 无法加载自定义唤醒词: {e}")
+    porcupine = pvporcupine.create(access_key=PORCUPINE_ACCESS_KEY, keywords=['picovoice'])
 
 # 初始化音频流
 pa = pyaudio.PyAudio()
@@ -104,7 +102,6 @@ def detect_face_and_emotion():
 
 def record_audio(max_duration):
     """录制音频，支持静音检测"""
-    print(f"🎙️  开始录音 (最长 {max_duration}s)...")
     frames = []
     CHUNK_SIZE = porcupine.frame_length
     SILENCE_THRESHOLD = 500
@@ -123,7 +120,6 @@ def record_audio(max_duration):
             if energy < SILENCE_THRESHOLD: silence_counter += 1
             else: silence_counter = 0
             if recorded_frames > int(porcupine.sample_rate / CHUNK_SIZE * 3) and silence_counter > silence_frames_limit:
-                print("⏹️  检测到静音，停止录音")
                 break
         except: break
     return b''.join(frames)
@@ -170,27 +166,17 @@ def encode_image_base64(image_path):
             return base64.b64encode(f.read()).decode('utf-8')
     except: return None
 
-def call_openclaw(text, emotion=None, image_path=None):
+def call_openclaw(text, emotion=None, image_path=None, history=[]):
     """调用OpenClaw接口获取回复"""
     app.title = STATUS_THINKING
     try:
         memory_context = ""
-        if ENABLE_MEMORY and memory_manager:
+        if not history and ENABLE_MEMORY and memory_manager:
             memory_context = memory_manager.query_memory(text)
         
-        system_prompt = "你是一个亲切、聪明、且带有一点点俏皮感的助手，名叫小德 (Xiaode)。你的形象是一只温暖的小熊 🐻。你的回复应该是温馨、平易近人的，不要像冰冷的机器。"
+        system_prompt = "你是一个名叫小德 (Xiaode) 的助手，形象是 🐻。你可以使用工具来执行命令（如打开应用、搜索、管理文件）。优先尝试解决问题，如果涉及危险操作请先询问用户。"
         if memory_context: system_prompt += f"\n这是关于用户的一些背景记忆：\n{memory_context}"
-        if emotion:
-            e_p = {
-                'happy': "用户现在心情很好，你可以和他一起开心，用更欢快的语气。",
-                'sad': "用户现在看起来有点难过，请展示你作为温暖小熊的体贴和包容。",
-                'angry': "用户现在可能有情绪，请保持耐心，作为一只温顺的小熊给予安抚。",
-                'surprise': "用户感到惊讶，你可以用好奇和探索的语气和他交流。",
-                'neutral': "保持亲切自然的交流风格。"
-            }
-            system_prompt += f" {e_p.get(emotion, '根据用户的情感状态回复。')}"
-        if image_path: system_prompt += "\n当前已提供屏幕截图，请结合图片内容（代码、图表等）分析。"
-
+        
         user_content = []
         if image_path:
             b64 = encode_image_base64(image_path)
@@ -202,21 +188,22 @@ def call_openclaw(text, emotion=None, image_path=None):
         routing_id = f"{OPENCLAW_CHANNEL}/{OPENCLAW_ACCOUNT}/{OPENCLAW_AGENT}"
         if not OPENCLAW_CHANNEL or not OPENCLAW_ACCOUNT: routing_id = SESSION_KEY
             
-        print(f"🎯 正在路由至: {routing_id}")
         payload = {
             "model": routing_id,
-            "messages": [{"role": "system", "content": system_prompt}, user_msg]
+            "messages": [{"role": "system", "content": system_prompt}] + history + [user_msg],
+            "tools": "auto"
         }
         headers = {"Authorization": f"Bearer {OPENCLAW_TOKEN}", "Content-Type": "application/json"}
-        for _ in range(3):
-            try:
-                r = requests.post(OPENCLAW_API_URL, json=payload, headers=headers, timeout=120)
-                if r.status_code == 200: return r.json()["choices"][0]["message"]["content"]
-            except: pass
-        return "抱歉，我现在无法回答你的问题。"
+        response = requests.post(OPENCLAW_API_URL, json=payload, headers=headers, timeout=120)
+        if response.status_code == 200:
+            choice = response.json()["choices"][0]["message"]
+            if "tool_calls" in choice:
+                return {"type": "tool_call", "calls": choice["tool_calls"], "raw_message": choice}
+            return {"type": "text", "content": choice.get("content", "")}
+        return {"type": "error", "content": "抱歉，无法回复。"}
     except Exception as e:
         print(f"❌ 调用失败: {e}")
-        return "发生未知错误。"
+        return {"type": "error", "content": "发生未知错误。"}
 
 def clean_text_for_tts(text):
     """清理播报文本"""
@@ -241,7 +228,7 @@ async def _edge_speak(text):
     if os.path.exists(temp_file): os.remove(temp_file)
 
 def stop_speaking():
-    """打断播报"""
+    """停止播报"""
     if current_speaker_process[0] and current_speaker_process[0].poll() is None:
         print("🛑 打断。")
         current_speaker_process[0].terminate()
@@ -275,15 +262,14 @@ class VoiceAssistantApp(rumps.App):
         self.menu = ["关于小德", "重启助手"]
     @rumps.clicked("关于小德")
     def about(self, _):
-        rumps.alert("小德 v2.4.1\n您的温馨数字副官 🐻\n\n状态：\n💤 待机\n🎙️ 倾听\n🤔 思考\n🗣️ 播报")
+        rumps.alert("小德 v3.0.1\n您的温馨数字副官 🐻⚙️")
     @rumps.clicked("重启助手")
     def restart(self, _):
         os.execv(sys.executable, ['python'] + sys.argv)
 
 def run_voice_assistant():
     """主逻辑"""
-    global is_first_run
-    is_first_run = True
+    history = []
     print("✅ 小德已就绪...")
     app.title = STATUS_IDLE
     try:
@@ -297,28 +283,31 @@ def run_voice_assistant():
                 def b_vision():
                     try:
                         if ENABLE_FACE_RECOGNITION and ENABLE_EMOTION_ANALYSIS:
-                            _, em = detect_face_and_emotion()
-                            e_res[0] = em
+                            _, em = detect_face_and_emotion(); e_res[0] = em
                     except: pass
                 threading.Thread(target=b_vision).start()
-                if is_first_run:
-                    speak(get_time_greeting())
-                    is_first_run = False
-                else: speak("小德在呢 🐻")
+                speak("小德在呢 🐻")
                 app.title = STATUS_LISTENING
                 audio_data = record_audio(MAX_RECORD_SECONDS)
                 text = audio_to_text(audio_data)
-                print(f"👤 你说：{text}")
                 if not text.strip(): continue
-                i_path = capture_screen() if any(k in text for k in ["看下屏幕", "一下屏幕", "这是什么", "解释内容"]) else None
+                print(f"👤 你说：{text}")
+                i_path = capture_screen() if any(k in text for k in ["看下屏幕", "这是什么", "分析内容"]) else None
                 if i_path: speak("好的，我这只小熊 🐻 帮你瞅瞅。")
-                elif any(k in text for k in ["新闻", "搜索", "查"]): speak("好的，稍等下...")
-                response = call_openclaw(text, e_res[0], i_path)
-                speak(response, with_filler=True)
-                if i_path and os.path.exists(i_path): os.remove(image_path)
+                res = call_openclaw(text, e_res[0], i_path, history)
+                if res["type"] == "text":
+                    speak(res["content"], with_filler=True)
+                    history.append({"role": "user", "content": text})
+                    history.append({"role": "assistant", "content": res["content"]})
+                elif res["type"] == "tool_call":
+                    app.title = STATUS_ACTION
+                    action_desc = f"我正准备帮您执行：{', '.join([c['function']['name'] for c in res['calls']])}，正在处理..."
+                    speak(action_desc)
+                if i_path and os.path.exists(i_path): os.remove(i_path)
                 if ENABLE_MEMORY and memory_manager:
-                    threading.Thread(target=memory_manager.extract_and_save_facts, args=(text, response), daemon=True).start()
+                    threading.Thread(target=memory_manager.extract_and_save_facts, args=(text, str(res)), daemon=True).start()
                 app.title = STATUS_IDLE
+                if len(history) > 10: history = history[-10:]
     except Exception as e:
         print(f"❌ 运行错误: {e}")
     finally:
