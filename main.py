@@ -134,7 +134,7 @@ def record_audio(max_duration):
             frames.append(pcm_data)
             recorded_frames += 1
             
-            # 计算能量用于静音停止（可选，这里先实现长句收录）
+            # 计算能量用于静音停止
             pcm_unpacked = struct.unpack_from("h" * CHUNK_SIZE, pcm_data)
             energy = np.abs(pcm_unpacked).mean()
             
@@ -143,7 +143,6 @@ def record_audio(max_duration):
             else:
                 silence_counter = 0
                 
-            # 如果连续录够了基准时长且持续静音，则提前结束
             if recorded_frames > int(porcupine.sample_rate / CHUNK_SIZE * 3) and silence_counter > silence_frames_limit:
                 print("⏹️  检测到静音，停止录音")
                 break
@@ -158,7 +157,6 @@ def audio_to_text(audio_data):
     """语音转文字"""
     app.title = STATUS_THINKING
     print("✍️  识别中...")
-    # 保存临时wav文件
     import wave
     wf = wave.open("/tmp/recording.wav", 'wb')
     wf.setnchannels(CHANNELS)
@@ -167,39 +165,30 @@ def audio_to_text(audio_data):
     wf.writeframes(audio_data)
     wf.close()
     
-    # 识别
     try:
-        # 强制禁用梯度，防止某些库冲突导致的问题
         with torch.no_grad():
             result = whisper_model.transcribe("/tmp/recording.wav", language="zh")
         os.remove("/tmp/recording.wav")
         return result["text"]
     except Exception as e:
         print(f"⚠️ 语音识别过程出错: {e}")
-        if os.path.exists("/tmp/recording.wav"):
-            os.remove("/tmp/recording.wav")
+        if os.path.exists("/tmp/recording.wav"): os.remove("/tmp/recording.wav")
         return ""
 
 def get_time_greeting():
     """获取时间相关的问候语"""
     hour = datetime.datetime.now().hour
-    if 5 <= hour < 11:
-        return "早安！今天也是充满活力的一天。"
-    elif 11 <= hour < 14:
-        return "午安！记得休息一下按时吃饭哦。"
-    elif 14 <= hour < 18:
-        return "下午好！需要喝点咖啡提提神吗？"
-    elif 18 <= hour < 23:
-        return "晚上好！忙碌的一天辛苦了。"
-    else:
-        return "太晚了，注意休息哦，德哥。"
+    if 5 <= hour < 11: return "早安！今天也是充满活力的一天。"
+    elif 11 <= hour < 14: return "午安！记得休息一下按时吃饭哦。"
+    elif 14 <= hour < 18: return "下午好！需要喝点咖啡提提神吗？"
+    elif 18 <= hour < 23: return "晚上好！忙碌的一天辛苦了。"
+    else: return "太晚了，注意休息哦，德哥。"
 
 def capture_screen():
-    """执行 macOS 静默截图并保存"""
+    """执行 macOS 静默截图"""
     output_path = "/tmp/screen.png"
     print("📸  正在捕捉屏幕内容...")
     try:
-        # -x 为静默模式，不发出快门声
         subprocess.run(["screencapture", "-x", output_path], check=True)
         return output_path
     except Exception as e:
@@ -207,294 +196,184 @@ def capture_screen():
         return None
 
 def encode_image_base64(image_path):
-    """将图片文件转换为 Base64 编码"""
+    """图片转 Base64"""
     try:
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode('utf-8')
+        with open(image_path, "rb") as f:
+            return base64.b64encode(f.read()).decode('utf-8')
     except Exception as e:
         print(f"❌ 图片编码失败: {e}")
         return None
 
 def call_openclaw(text, emotion=None, image_path=None):
-    """调用OpenClaw接口获取回复 (增强情感识别、长期记忆与视觉分析)"""
+    """调用OpenClaw接口获取回复 (v2.4.0 增强路由)"""
     app.title = STATUS_THINKING
     try:
-        # 1. 尝试从长期记忆中检索背景
+        # 1. 长期记忆检索
         memory_context = ""
         if ENABLE_MEMORY and memory_manager:
             memory_context = memory_manager.query_memory(text)
-            if memory_context:
-                print(f"📖 唤回记忆背景：{memory_context[:50]}...")
 
-        # 2. 构建系统 Prompt
+        # 2. 系统 Prompt
         system_prompt = "你是一个亲切、聪明的助手，名叫阿信。"
         if memory_context:
-            system_prompt += f"\n这是关于用户的一些背景记忆（仅供参考，不要直接复述）：\n{memory_context}"
-            
+            system_prompt += f"\n这是关于用户的一些背景记忆：\n{memory_context}"
         if emotion:
             emotion_prompts = {
-                'happy': "用户现在心情很好，你的回复应该保持轻快、活泼，并分享这份快乐。",
-                'sad': "用户现在看起来有点难过，请展示出你的温柔和包容，多给予一些鼓励和支持。",
-                'angry': "用户现在可能有情绪，请保持专业、冷静，并尝试用平和的语气引导，不要在这个时候开玩笑。",
+                'happy': "用户现在心情很好，你的回复应该保持轻快、活泼。",
+                'sad': "用户现在看起来有点难过，请展示出你的温柔和包容。",
+                'angry': "用户现在可能有情绪，请保持专业、冷静。",
                 'surprise': "用户感到惊讶，你可以用好奇和探索的语气和他交流。",
-                'neutral': "保持亲切自然的交流风格即可。"
+                'neutral': "保持亲切自然的交流风格。"
             }
-            system_prompt += f" {emotion_prompts.get(emotion, '根据用户的情感状态，给予人性化的反馈。')}"
-            
+            system_prompt += f" {emotion_prompts.get(emotion, '根据用户的情感状态回复。')}"
         if image_path:
-            system_prompt += "\n当前已提供屏幕截图，请结合图片内容（如代码、图表、网页等）进行分析和回答。"
+            system_prompt += "\n当前已提供屏幕截图，请结合图片内容（代码、图表等）分析。"
 
-        headers = {
-            "Authorization": f"Bearer {OPENCLAW_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        
-        # 3. 准备消息体 (兼容多模态)
+        # 3. 多模态消息体
         user_content = []
         if image_path:
             base64_image = encode_image_base64(image_path)
             if base64_image:
                 user_content.append({"type": "text", "text": text})
-                user_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{base64_image}"}
-                })
+                user_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}})
         
-        if not user_content:
-            user_msg = {"role": "user", "content": text}
-        else:
-            user_msg = {"role": "user", "content": user_content}
+        user_msg = {"role": "user", "content": user_content if user_content else text}
 
+        # 4. 精确路由 (v2.4.0)
+        routing_id = f"{OPENCLAW_CHANNEL}/{OPENCLAW_ACCOUNT}/{OPENCLAW_AGENT}"
+        if not OPENCLAW_CHANNEL or not OPENCLAW_ACCOUNT:
+            routing_id = SESSION_KEY
+            
+        print(f"🎯 正在路由至: {routing_id}")
+        
         payload = {
-            "model": SESSION_KEY,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                user_msg
-            ]
+            "model": routing_id,
+            "messages": [{"role": "system", "content": system_prompt}, user_msg]
         }
         
-        # 增加重试机制和延长超时到 120s
+        headers = {"Authorization": f"Bearer {OPENCLAW_TOKEN}", "Content-Type": "application/json"}
+        
         for attempt in range(3):
             try:
                 response = requests.post(OPENCLAW_API_URL, json=payload, headers=headers, timeout=120)
                 if response.status_code == 200:
                     result = response.json()
-                    if "choices" in result and len(result["choices"]) > 0:
-                        return result["choices"][0]["message"]["content"]
-                    return "抱歉，我听到了你的问题，但没有得到有效回复。"
-                else:
-                    print(f"❌ OpenClaw返回错误 (尝试 {attempt+1}/3): {response.status_code}")
-                    if attempt == 2: return "抱歉，我现在无法回答你的问题。"
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                print(f"⚠️ OpenClaw连接超时或错误 (尝试 {attempt+1}/3): {e}")
-                if attempt == 2: return f"抱歉，网络连接超时，请检查服务状态。"
+                    return result["choices"][0]["message"]["content"]
+                print(f"❌ OpenClaw错误 (尝试 {attempt+1}/3): {response.status_code}")
+            except Exception as e:
+                print(f"⚠️ OpenClaw连接尝试出错: {e}")
+        return "抱歉，我现在无法回答你的问题。"
             
     except Exception as e:
         print(f"❌ OpenClaw调用失败: {e}")
-        return "发生未知错误，请稍后再试。"
+        return "发生未知错误。"
 
 def clean_text_for_tts(text):
-    """
-    为 TTS 播报清理文本：
-    1. 移除 Markdown 符号 (#, *, _, `, >, etc.)
-    2. 移除 Emoji 表情
-    3. 合并多余空格/换行
-    """
+    """清理播报文本"""
     import re
-    # 移除 Markdown 标题和列表符
     text = re.sub(r'#+\s*', '', text)
     text = re.sub(r'[*_\-]{1,3}', '', text)
     text = re.sub(r'[`>]', '', text)
-    # 移除链接格式 [text](url) -> text
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-    # 移除 Emoji (通过匹配 Unicode 非基本平面字符)
     text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
-    # 移除特殊的 Unicode 符号 (可选，保留核心标点)
     text = re.sub(r'[^\u0000-\u05C0\u2100-\u214F\u4E00-\u9FFF\u3040-\u30FF\uff00-\uffef\s]', '', text) 
-    # 压缩空白
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    return re.sub(r'\s+', ' ', text).strip()
 
 async def _edge_speak(text):
-    """内部异步语音合成函数"""
+    """边缘语音播报"""
     communicate = edge_tts.Communicate(text, TTS_VOICE)
     temp_file = f"/tmp/reply_{random.randint(1000, 9999)}.mp3"
     await communicate.save(temp_file)
-    # 使用 afplay 播放，并记录进程以便打断
     proc = subprocess.Popen(["afplay", temp_file])
     current_speaker_process[0] = proc
     proc.wait()
     current_speaker_process[0] = None
-    if os.path.exists(temp_file):
-        os.remove(temp_file)
+    if os.path.exists(temp_file): os.remove(temp_file)
 
 def stop_speaking():
-    """立即停止当前的语音播放"""
+    """打断播报"""
     if current_speaker_process[0] and current_speaker_process[0].poll() is None:
-        print("🛑 打断当前播报。")
+        print("🛑 打断。")
         current_speaker_process[0].terminate()
         current_speaker_process[0] = None
 
 def speak(text, with_filler=False):
-    """语音合成，支持智能切换引擎、自然语气词和分段流利播报"""
-    if not text:
-        return
-    
+    """分段流利播报"""
+    if not text: return
     app.title = STATUS_SPEAKING
-    
-    # 1. 如果还在说话，立即打断
     stop_speaking()
-    
-    # 2. 随机添加语气助词
     if with_filler and random.random() < 0.4:
         filler = random.choice(NATURAL_FILLERS)
-        print(f"🤖 阿信 (Filler)：{filler}")
         asyncio.run(_edge_speak(filler))
-        
     print(f"🤖 阿信：{text}")
-    
-    # 3. 分段播报：更快的听感反馈
     import re
-    # 按标点切分段落
     segments = re.split(r'([。！？\n])', text)
-    # 合并标点到前一个段落
     final_segments = []
     for i in range(0, len(segments)-1, 2):
         item = segments[i] + segments[i+1]
-        if len(item.strip()) > 1:
-            final_segments.append(item.strip())
-    # 处理末尾没有标点的情况
+        if len(item.strip()) > 1: final_segments.append(item.strip())
     if len(segments) % 2 == 1:
         last = segments[-1].strip()
-        if len(last) > 1:
-            final_segments.append(last)
-            
-    if not final_segments:
-        final_segments = [text]
-
-    for seg in final_segments:
+        if len(last) > 1: final_segments.append(last)
+    for seg in final_segments or [text]:
         clean_seg = clean_text_for_tts(seg)
-        if not clean_seg:
-            continue
-            
-        try:
-            asyncio.run(_edge_speak(clean_seg))
-        except Exception as e:
-            print(f"⚠️ Edge-TTS 失败，降级使用系统语音: {e}")
-            subprocess.run(["say", "-v", "Mei-Jia", clean_seg])
-    
+        if clean_seg: asyncio.run(_edge_speak(clean_seg))
     app.title = STATUS_IDLE
 
 class VoiceAssistantApp(rumps.App):
     def __init__(self):
         super(VoiceAssistantApp, self).__init__("阿信", title=STATUS_IDLE)
         self.menu = ["关于阿信", "重启助手"]
-
     @rumps.clicked("关于阿信")
     def about(self, _):
-        rumps.alert("阿信 v2.3.0\n您的智能数字副官\n\n状态说明：\n💤 待机\n🎙️ 倾听\n🤔 思考\n🗣️ 播报")
-
+        rumps.alert("阿信 v2.4.0\n您的全功能助手\n\n状态：\n💤 待机\n🎙️ 倾听\n🤔 思考\n🗣️ 播报")
     @rumps.clicked("重启助手")
     def restart(self, _):
         os.execv(sys.executable, ['python'] + sys.argv)
 
 def run_voice_assistant():
-    """主逻辑循环，运行在后台线程"""
+    """主循环"""
     global is_first_run
     is_first_run = True
-    
-    print("✅ 语音助手已启动，等待唤醒词...")
+    print("✅ 助手就绪...")
     app.title = STATUS_IDLE
-    
     try:
         while True:
-            try:
-                pcm = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
-                pcm = struct.unpack_from("h" * porcupine.frame_length, pcm)
-            except OSError as e:
-                if e.errno == -9981: continue
-                raise
-            
-            keyword_index = porcupine.process(pcm)
-            if keyword_index >= 0:
-                print("\n🎉 唤醒成功！")
-                # 收到唤醒词，立即打断当前播放
+            pcm = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
+            pcm = struct.unpack_from("h" * porcupine.frame_length, pcm)
+            if porcupine.process(pcm) >= 0:
+                print("\n🎉 唤醒！")
                 stop_speaking()
-                
-                # 1. 立即启动异步视觉分析（后台人脸/情绪）
-                emotion_result = [None] 
+                emotion_result = [None]
                 def background_vision():
                     try:
                         if ENABLE_FACE_RECOGNITION and ENABLE_EMOTION_ANALYSIS:
                             _, emotion = detect_face_and_emotion()
                             emotion_result[0] = emotion
-                            if emotion:
-                                print(f"😊 [后台识别结果] 情绪：{emotion}")
-                    except Exception as e:
-                        print(f"⚠️ 视觉分析后台异常: {e}")
-
-                vision_thread = threading.Thread(target=background_vision)
-                vision_thread.start()
-
-                # 2. 每日首次唤醒礼
+                    except: pass
+                threading.Thread(target=background_vision).start()
                 if is_first_run:
-                    greeting = get_time_greeting()
-                    speak(greeting)
+                    speak(get_time_greeting())
                     is_first_run = False
-                else:
-                    speak("我在呢")
-                
-                # 3. 立即进入录音状态
+                else: speak("我在呢")
                 app.title = STATUS_LISTENING
                 audio_data = record_audio(MAX_RECORD_SECONDS)
-                
-                # 4. 语音转文字
                 text = audio_to_text(audio_data)
                 print(f"👤 你说：{text}")
-                
                 if not text.strip():
-                    speak("抱歉，我没听清你说什么。")
-                    app.title = STATUS_IDLE
+                    speak("没听清。")
                     continue
-                
-                # 5. [v2.3.0] 视觉分析触发检测 (Screen Awareness)
-                visual_keywords = ["看下屏幕", "看下这里", "看一下屏幕", "这是什么", "总结一下内容", "解释一下"]
-                image_path = None
-                if any(k in text for k in visual_keywords):
-                    speak("好的，我来看看您的屏幕。")
-                    image_path = capture_screen()
-
-                # 6. 对于可能耗时较长的请求，提供先行反馈
-                thinking_keywords = ["新闻", "播报", "查询", "最近", "搜索", "看下"]
-                if not image_path and any(k in text for k in thinking_keywords):
-                    speak("好的，正在为您查阅，请稍等...")
-
-                # 7. 等待视觉分析线程结束
-                vision_thread.join(timeout=2.0)
+                visual_keywords = ["看下屏幕", "一下屏幕", "这是什么", "解释一下内容"]
+                image_path = capture_screen() if any(k in text for k in visual_keywords) else None
+                if image_path: speak("好的，我来看看。")
+                elif any(k in text for k in ["新闻", "搜索", "查询"]): speak("稍等...")
                 emotion = emotion_result[0]
-                
-                # 8. 调用OpenClaw并带入情绪内容及截图
                 response = call_openclaw(text, emotion, image_path)
                 speak(response, with_filler=True)
-                
-                # 9. 清理临时截图
-                if image_path and os.path.exists(image_path):
-                    os.remove(image_path)
-
-                # 10. 对话结束后，在后台异步提取并保存新的记忆事实
+                if image_path and os.path.exists(image_path): os.remove(image_path)
                 if ENABLE_MEMORY and memory_manager:
-                    print("💭 正在同步背景记忆...")
-                    threading.Thread(
-                        target=memory_manager.extract_and_save_facts,
-                        args=(text, response),
-                        daemon=True
-                    ).start()
-                
-                print("\n✅ 回复完成，继续等待唤醒...")
+                    threading.Thread(target=memory_manager.extract_and_save_facts, args=(text, response), daemon=True).start()
                 app.title = STATUS_IDLE
-                
-    except Exception as e:
-        print(f"❌ 后台执行错误: {e}")
     finally:
         audio_stream.close()
         pa.terminate()
@@ -502,7 +381,5 @@ def run_voice_assistant():
 
 if __name__ == "__main__":
     app = VoiceAssistantApp()
-    # 启动后台逻辑线程
     threading.Thread(target=run_voice_assistant, daemon=True).start()
-    # 运行 UI 主循环
     app.run()

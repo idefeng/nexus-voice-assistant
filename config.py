@@ -1,27 +1,35 @@
-# OpenClaw配置
+# OpenClaw 基础配置
 OPENCLAW_API_URL = "http://localhost:18789/v1/chat/completions"
 OPENCLAW_TOKEN = "b5993a1fab396eb87cf92a6ab8c6e4962d198d2409b3714a"
-SESSION_KEY = "scholar"  # 使用Agent ID作为模型名
+
+# Advanced Routing (v2.4.0)
+# 格式: channel/accountId/agentId
+# 例如: "telegram/main/main" 或 "telegram/idf_childcare/project_childcare"
+OPENCLAW_CHANNEL = "telegram"
+OPENCLAW_ACCOUNT = "main"
+OPENCLAW_AGENT = "main"
+
+# 降级/基础配置
+SESSION_KEY = "scholar" 
 
 # 唤醒词配置
 WAKE_WORD_PATH = "./models/小德_zh_mac_v4_0_0.ppn"
 PORCUPINE_MODEL_PATH = "./models/porcupine_params_zh.pv"
-PORCUPINE_ACCESS_KEY = "nApLVOOz0OFhReQa62OKtQs7fYsFxcDx1EcTyC/MW8x6q2M2xS6TxQ=="  # 已自动填充
+PORCUPINE_ACCESS_KEY = "nApLVOOz0OFhReQa62OKtQs7fYsFxcDx1EcTyC/MW8x6q2M2xS6TxQ=="
 
 # 功能开关
 ENABLE_VOICE_RECOGNITION = True
 ENABLE_FACE_RECOGNITION = True
 ENABLE_EMOTION_ANALYSIS = True
-ENABLE_MEMORY = True  # v2.0.0 长期记忆开关
+ENABLE_MEMORY = True
 
 # 音频配置
 SAMPLERATE = 16000
 CHANNELS = 1
-RECORD_SECONDS = 5
-MAX_RECORD_SECONDS = 30  # 支持长句子收录
+MAX_RECORD_SECONDS = 30
 
 # 模型配置
-WHISPER_MODEL = "medium"  # 升级到 medium 以获得更好识别精度
+WHISPER_MODEL = "medium"
 
 # 数据库路径
 MEMORY_DB_PATH = "./memory_db"
@@ -33,6 +41,4 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
 # TTS配置
-TTS_RATE = 200
-TTS_VOLUME = 0.9
-TTS_VOICE = "zh-CN-XiaoxiaoNeural"  # 使用 Edge-TTS 的优秀音色
+TTS_VOICE = "zh-CN-XiaoxiaoNeural"
