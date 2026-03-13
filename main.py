@@ -40,6 +40,10 @@ silence_stderr()
 from config import *
 from memory_manager import memory_manager
 from scripts.context_helper import get_active_window_info, get_system_load
+from ui_manager import init_ui_manager
+from flet_ui import start_flet_ui
+
+ui = init_ui_manager(UI_TYPE if ENABLE_UI else "none")
 
 # 状态表情
 STATUS_IDLE = "💤"
@@ -232,7 +236,7 @@ def record_audio(max_duration, is_follow_up=False):
     return b''.join(frames)
 
 def audio_to_text(audio_data):
-    app.title = STATUS_THINKING
+    ui.title = STATUS_THINKING
     wf = f"/tmp/r_{random.randint(0,99)}.wav"
     import wave
     with wave.open(wf, 'wb') as f:
@@ -307,7 +311,8 @@ def execute_tool(name, args):
         return f"API 访问失败: {str(e)}"
 
 def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=False, p_mode="greeting", is_tired=False):
-    app.title = STATUS_THINKING
+    ui.title = STATUS_THINKING
+    ui.update_state({"transcription": text, "response": ""})
     try:
         mem = ""
         if not history and ENABLE_MEMORY and memory_manager:
@@ -349,7 +354,9 @@ def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=
             msgs.append(msg)
             
             if not msg.get("tool_calls"):
-                return {"type": "text", "content": msg.get("content", "")}
+                content = msg.get("content", "")
+                ui.update_state({"response": content})
+                return {"type": "text", "content": content}
             
             for call in msg["tool_calls"]:
                 name, tid = call["function"]["name"], call["id"]
@@ -376,7 +383,7 @@ async def _stream_speak(text):
 
 def speak(text, with_filler=False):
     if not text or not text.strip(): return
-    app.title = STATUS_SPEAKING
+    ui.title = STATUS_SPEAKING
     if current_speaker_process[0] and current_speaker_process[0].poll() is None:
         current_speaker_process[0].terminate()
     if with_filler and random.random() < 0.3:
@@ -386,7 +393,7 @@ def speak(text, with_filler=False):
     for seg in segs or [text]:
         clean = re.sub(r'#+\s*|[*_\-]{1,3}|[`>]|\[([^\]]+)\]\([^\)]+\)|[\U00010000-\U0010ffff]', '', seg)
         if clean.strip(): asyncio.run(_stream_speak(clean.strip()))
-    app.title = STATUS_IDLE
+    ui.title = STATUS_IDLE
 
 class VoiceAssistantApp(rumps.App):
     def __init__(self):
@@ -452,7 +459,7 @@ def run_voice_assistant():
                 if is_triggered and is_sleeping:
                     is_sleeping = False
                     print("🌅 小德已被唤醒，正在解除休眠...")
-                    app.title = STATUS_IDLE
+                    ui.title = STATUS_IDLE
             else:
                 is_triggered = True
 
@@ -469,21 +476,22 @@ def run_voice_assistant():
                 if not follow_up:
                     speak("我在呢 🐻")
                 
-                app.title = STATUS_LISTENING
+                ui.title = STATUS_LISTENING
+                ui.update_state({"transcription": "正在倾听...", "response": ""})
                 audio = record_audio(MAX_RECORD_SECONDS, is_follow_up=follow_up)
                 if audio is None: 
-                    follow_up = False; app.title = STATUS_IDLE; continue
+                    follow_up = False; ui.title = STATUS_IDLE; continue
                 
                 text = audio_to_text(audio)
                 if not text or not text.strip(): 
-                    follow_up = False; app.title = STATUS_IDLE; continue
+                    follow_up = False; ui.title = STATUS_IDLE; continue
                 
                 vt.join(timeout=1.5)
                 # 鉴权逻辑
                 if master_embedding is not None:
                     if face_res["emb"] is None or not is_authorized(face_res["emb"]):
                         print("🚫 身份验证未通过，拒绝交互。")
-                        app.title = STATUS_LOCKED
+                        ui.title = STATUS_LOCKED
                         follow_up = False; continue
                 
                 print(f"👤 你说：{text}")
@@ -492,7 +500,7 @@ def run_voice_assistant():
                 sleep_keywords = ["待机", "退出", "你先等等", "睡觉吧", "休眠", "退下"]
                 if any(k in text for k in sleep_keywords):
                     is_sleeping = True
-                    app.title = STATUS_SLEEPING
+                    ui.title = STATUS_SLEEPING
                     follow_up = False
                     print("🌙 小德进入休眠状态。静默感知已开启。")
                     continue
@@ -508,7 +516,7 @@ def run_voice_assistant():
                     speak(res["content"], with_filler=True)
                     history.extend([{"role": "user", "content": text}, {"role": "assistant", "content": res["content"]}])
                     follow_up = True
-                    app.title = "👂"
+                    ui.title = "👂"
                 else:
                     follow_up = False
                 
@@ -521,6 +529,14 @@ def run_voice_assistant():
         audio_stream.close(); pa.terminate(); porcupine.delete()
 
 if __name__ == "__main__":
-    app = VoiceAssistantApp()
-    threading.Thread(target=run_voice_assistant, daemon=True).start()
-    app.run()
+    if ENABLE_UI:
+        if UI_TYPE == "flet":
+            threading.Thread(target=start_flet_ui, args=(ui.state_queue,), daemon=True).start()
+        elif UI_TYPE == "rumps":
+            app = VoiceAssistantApp()
+            ui.set_ui_instance(app)
+            threading.Thread(target=run_voice_assistant, daemon=True).start()
+            app.run()
+            sys.exit(0)
+
+    run_voice_assistant()

@@ -21,6 +21,8 @@ ENABLE_VOICE_RECOGNITION = True
 ENABLE_FACE_RECOGNITION = True
 ENABLE_EMOTION_ANALYSIS = True
 ENABLE_MEMORY = True
+ENABLE_UI = True # 是否启用新 UI 界面
+UI_TYPE = "flet" # 支持: "flet", "rumps", "none"
 
 # 音频配置
 SAMPLERATE = 16000
