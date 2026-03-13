@@ -230,6 +230,28 @@ def call_openclaw(text, emotion=None):
         print(f"❌ OpenClaw调用失败: {e}")
         return "发生未知错误，请稍后再试。"
 
+def clean_text_for_tts(text):
+    """
+    为 TTS 播报清理文本：
+    1. 移除 Markdown 符号 (#, *, _, `, >, etc.)
+    2. 移除 Emoji 表情
+    3. 合并多余空格/换行
+    """
+    import re
+    # 移除 Markdown 标题和列表符
+    text = re.sub(r'#+\s*', '', text)
+    text = re.sub(r'[*_\-]{1,3}', '', text)
+    text = re.sub(r'[`>]', '', text)
+    # 移除链接格式 [text](url) -> text
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    # 移除 Emoji (简单范围匹配)
+    text = text.encode('soft-ascii', 'ignore').decode('ascii') # 方案1: 暴力去除非 ASCII
+    # 方案2: 更好的 Unicode 范围过滤 (由于 Python re 限制，通常使用更广泛的正则或专门库，这里先用基础正则)
+    text = re.sub(r'[^\u0000-\u05C0\u2100-\u214F\u4E00-\u9FFF\u3040-\u30FF\uff00-\uffef]', '', text) 
+    # 压缩空白
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
 async def _edge_speak(text):
     """内部异步语音合成函数"""
     communicate = edge_tts.Communicate(text, TTS_VOICE)
@@ -254,15 +276,21 @@ def speak(text, with_filler=False):
         asyncio.run(_edge_speak(filler))
         
     print(f"🤖 阿信：{text}")
+    
+    # 获取清理后的播报文本
+    clean_text = clean_text_for_tts(text)
+    if not clean_text:
+        return
+        
     try:
         # 使用 edge-tts 获得高级自然语音
-        asyncio.run(_edge_speak(text))
+        asyncio.run(_edge_speak(clean_text))
     except Exception as e:
         print(f"⚠️ Edge-TTS 失败，降级使用系统语音: {e}")
         try:
-            subprocess.run(["say", "-v", "Mei-Jia", text], check=True)
+            subprocess.run(["say", "-v", "Mei-Jia", clean_text], check=True)
         except:
-            subprocess.run(["say", text])
+            subprocess.run(["say", clean_text])
     
     app.title = STATUS_IDLE
  
