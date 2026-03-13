@@ -17,10 +17,19 @@ import random
 import datetime
 import torch
 import warnings
+import logging
 from onnxruntime import InferenceSession
+
+# 净化日志：屏蔽冗余输出、FutureWarning 和下载进度条
+logging.getLogger("insightface").setLevel(logging.ERROR)
+logging.getLogger("onnxruntime").setLevel(logging.ERROR)
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 from config import *
 from memory_manager import memory_manager
+
 # 状态表情常量
 STATUS_IDLE = "💤"
 STATUS_LISTENING = "🎙️"
@@ -29,6 +38,9 @@ STATUS_SPEAKING = "🗣️"
 
 # 自然语气词
 NATURAL_FILLERS = ["嗯...", "我想想...", "好的，我明白了。", "原来是这样。", "让我想一下。"]
+
+# 全局变量：用于追踪当前正在播放的 TTS 进程（实现打断）
+current_speaker_process = [None]
 
 # 初始化Whisper模型
 print(f"🔊 加载语音识别模型 ({WHISPER_MODEL})...")
@@ -265,21 +277,34 @@ def clean_text_for_tts(text):
 async def _edge_speak(text):
     """内部异步语音合成函数"""
     communicate = edge_tts.Communicate(text, TTS_VOICE)
-    temp_file = "/tmp/reply.mp3"
+    temp_file = f"/tmp/reply_{random.randint(1000, 9999)}.mp3"
     await communicate.save(temp_file)
-    # 使用 afplay (macOS 自带) 播放 mp3
-    subprocess.run(["afplay", temp_file])
+    # 使用 afplay 播放，并记录进程以便打断
+    proc = subprocess.Popen(["afplay", temp_file])
+    current_speaker_process[0] = proc
+    proc.wait()
+    current_speaker_process[0] = None
     if os.path.exists(temp_file):
         os.remove(temp_file)
 
+def stop_speaking():
+    """立即停止当前的语音播放"""
+    if current_speaker_process[0] and current_speaker_process[0].poll() is None:
+        print("🛑 打断当前播报。")
+        current_speaker_process[0].terminate()
+        current_speaker_process[0] = None
+
 def speak(text, with_filler=False):
-    """语音合成，支持智能切换引擎和自然语气词"""
+    """语音合成，支持智能切换引擎、自然语气词和分段流利播报"""
     if not text:
         return
     
     app.title = STATUS_SPEAKING
     
-    # 随机添加语气助词
+    # 1. 如果还在说话，立即打断
+    stop_speaking()
+    
+    # 2. 随机添加语气助词
     if with_filler and random.random() < 0.4:
         filler = random.choice(NATURAL_FILLERS)
         print(f"🤖 阿信 (Filler)：{filler}")
@@ -287,23 +312,38 @@ def speak(text, with_filler=False):
         
     print(f"🤖 阿信：{text}")
     
-    # 获取清理后的播报文本
-    clean_text = clean_text_for_tts(text)
-    if not clean_text:
-        return
-        
-    try:
-        # 使用 edge-tts 获得高级自然语音
-        asyncio.run(_edge_speak(clean_text))
-    except Exception as e:
-        print(f"⚠️ Edge-TTS 失败，降级使用系统语音: {e}")
+    # 3. 分段播报：更快的听感反馈
+    import re
+    # 按标点切分段落
+    segments = re.split(r'([。！？\n])', text)
+    # 合并标点到前一个段落
+    final_segments = []
+    for i in range(0, len(segments)-1, 2):
+        item = segments[i] + segments[i+1]
+        if len(item.strip()) > 1:
+            final_segments.append(item.strip())
+    # 处理末尾没有标点的情况
+    if len(segments) % 2 == 1:
+        last = segments[-1].strip()
+        if len(last) > 1:
+            final_segments.append(last)
+            
+    if not final_segments:
+        final_segments = [text]
+
+    for seg in final_segments:
+        clean_seg = clean_text_for_tts(seg)
+        if not clean_seg:
+            continue
+            
         try:
-            subprocess.run(["say", "-v", "Mei-Jia", clean_text], check=True)
-        except:
-            subprocess.run(["say", clean_text])
+            asyncio.run(_edge_speak(clean_seg))
+        except Exception as e:
+            print(f"⚠️ Edge-TTS 失败，降级使用系统语音: {e}")
+            subprocess.run(["say", "-v", "Mei-Jia", clean_seg])
     
     app.title = STATUS_IDLE
- 
+
 class VoiceAssistantApp(rumps.App):
     def __init__(self):
         super(VoiceAssistantApp, self).__init__("阿信", title=STATUS_IDLE)
@@ -311,7 +351,7 @@ class VoiceAssistantApp(rumps.App):
 
     @rumps.clicked("关于阿信")
     def about(self, _):
-        rumps.alert("阿信 v1.2.0\n您的智能数字副官\n\n状态说明：\n💤 待机\n🎙️ 倾听\n🤔 思考\n🗣️ 播报")
+        rumps.alert("阿信 v2.2.0\n您的智能数字副官\n\n状态说明：\n💤 待机\n🎙️ 倾听\n🤔 思考\n🗣️ 播报")
 
     @rumps.clicked("重启助手")
     def restart(self, _):
@@ -337,9 +377,11 @@ def run_voice_assistant():
             keyword_index = porcupine.process(pcm)
             if keyword_index >= 0:
                 print("\n🎉 唤醒成功！")
+                # 收到唤醒词，立即打断当前播放
+                stop_speaking()
                 
                 # 1. 立即启动异步视觉分析（不阻塞主链路）
-                emotion_result = [None] # 使用列表作为闭包容器获取线程结果
+                emotion_result = [None] 
                 def background_vision():
                     try:
                         if ENABLE_FACE_RECOGNITION and ENABLE_EMOTION_ANALYSIS:
@@ -361,7 +403,7 @@ def run_voice_assistant():
                 else:
                     speak("我在呢")
                 
-                # 3. 立即进入录音状态（录音时长受 MAX_RECORD_SECONDS 限制，并有静音检测）
+                # 3. 立即进入录音状态
                 app.title = STATUS_LISTENING
                 audio_data = record_audio(MAX_RECORD_SECONDS)
                 
@@ -374,16 +416,16 @@ def run_voice_assistant():
                     app.title = STATUS_IDLE
                     continue
                 
-                # 5. 对于可能耗时较长的请求（如新闻、搜索），提供先行反馈
+                # 5. 对于可能耗时较长的请求，提供先行反馈
                 thinking_keywords = ["新闻", "播报", "查询", "最近", "搜索", "看下"]
                 if any(k in text for k in thinking_keywords):
                     speak("好的，正在为您查阅，请稍等...")
 
-                # 6. 等待视觉分析线程结束（如果还在运行）以获取最新的情绪
+                # 6. 等待视觉分析线程结束
                 vision_thread.join(timeout=2.0)
                 emotion = emotion_result[0]
                 
-                # 7. 调用OpenClaw并带入情绪内容（不再单独语音播报情绪，由LLM在回复中体现）
+                # 7. 调用OpenClaw并带入情绪内容
                 response = call_openclaw(text, emotion)
                 speak(response, with_filler=True)
                 
