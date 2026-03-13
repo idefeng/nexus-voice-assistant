@@ -45,8 +45,13 @@ NATURAL_FILLERS = ["嗯...", "我想想...", "好的，我明白了。", "让我
 # 全局状态
 current_speaker_process = [None]
 last_interaction_time = time.time()
-proactive_cooldown = 120 # 用户自定义为2分钟测试
+proactive_cooldown = 120 # 测试用
 proactive_trigger_flag = threading.Event()
+scheduled_reminders = [
+    {"hour": 10, "minute": 30, "msg": "德哥，该喝水休息一下啦 🐻", "done": False},
+    {"hour": 15, "minute": 0, "msg": "下午茶时间到！要不要起来动一动？☕", "done": False},
+    {"hour": 23, "minute": 0, "msg": "太晚了，记得早点休息哦 🌕", "done": False},
+]
 
 # 初始化模型
 print(f"🔊 加载语音识别 ({WHISPER_MODEL})...")
@@ -95,19 +100,34 @@ def detect_face_and_emotion():
     outputs = emotion_session.run(None, {'Input3': face_img})
     return faces[0], emotion_labels[np.argmax(outputs[0])]
 
-def proactive_vision_loop():
-    """(v5.0.0) 后台视觉轮询：主动发现主人"""
+def proactive_intelligence_loop():
+    """(v5.0.2) 主动智能循环：视觉感知与定时关怀"""
     global last_interaction_time
     while True:
         try:
+            now = datetime.datetime.now()
+            
+            # 1. 定时关怀逻辑
+            for r in scheduled_reminders:
+                if r["hour"] == now.hour and r["minute"] == now.minute and not r["done"]:
+                    print(f"⏰ 触发定时关怀: {r['msg']}")
+                    speak(r["msg"])
+                    r["done"] = True
+                elif r["hour"] != now.hour: # 跨小时重置标识
+                    r["done"] = False
+            
+            # 2. 人脸感知主动问候
             if time.time() - last_interaction_time > proactive_cooldown:
                 face, _ = detect_face_and_emotion()
                 if face:
-                    print("👀 发现主人出现，准备主动问候...")
+                    print("👀 发现主人，触发主动问候...")
                     proactive_trigger_flag.set()
                     last_interaction_time = time.time()
+            
             time.sleep(10)
-        except: time.sleep(10)
+        except Exception as e:
+            print(f"⚠️ 主动智能循环异常: {e}")
+            time.sleep(10)
 
 def record_audio(max_duration):
     frames = []
@@ -148,8 +168,12 @@ def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=
         if not history and ENABLE_MEMORY and memory_manager:
             mem = memory_manager.query_memory(text)
         
-        sys_p = "你叫小德 (Xiaode) 🐻。你现在不仅能听命，还能主动感知用户并反馈。语气亲切、带点俏皮小熊感。"
-        if is_proactive: sys_p += " 【这是一个主动问候场景】你刚通过摄像头看到主人出现在电脑前，请根据记忆和时间打个温馨招呼。"
+        # 个性进化 (v5.0.2: 根据当前氛围微调)
+        vibe = "俏皮、温馨"
+        if emotion in ['sad', 'angry']: vibe = "极其温柔、富有同情心且温顺"
+            
+        sys_p = f"你叫小德 (Xiaode) 🐻。你是一只温暖的小熊，现在的说话风格是：{vibe}。你有长期记忆并能执行工具。"
+        if is_proactive: sys_p += " 【场景：主动发现用户】你刚看到主人，打个亲切的招呼。"
         if mem: sys_p += f"\n背景记忆：{mem}"
         
         user_c = []
@@ -170,7 +194,7 @@ def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=
             msg = r.json()["choices"][0]["message"]
             if "tool_calls" in msg: return {"type": "tool_call", "calls": msg["tool_calls"]}
             return {"type": "text", "content": msg.get("content", "")}
-        return {"type": "text", "content": "抱歉，出了一点小状况。"}
+        return {"type": "error", "content": f"服务响应异常 ({r.status_code})"}
     except Exception as e: return {"type": "error", "content": str(e)}
 
 async def _stream_speak(text):
@@ -203,20 +227,20 @@ class VoiceAssistantApp(rumps.App):
         super(VoiceAssistantApp, self).__init__("小德", title=STATUS_IDLE)
         self.menu = ["关于小德", "重启助手"]
     @rumps.clicked("关于小德")
-    def about(self, _): rumps.alert("小德 v5.0.1\n主动智能版 🐻✨")
+    def about(self, _): rumps.alert("小德 v5.0.2\n主动全能版 🐻✨🎯")
     @rumps.clicked("重启助手")
     def restart(self, _): os.execv(sys.executable, ['python'] + sys.argv)
 
 def run_voice_assistant():
     history = []
-    print("✅ 小德 v5.0.1 已就绪...")
-    threading.Thread(target=proactive_vision_loop, daemon=True).start()
+    print("✅ 小德 v5.0.2 已就绪...")
+    threading.Thread(target=proactive_intelligence_loop, daemon=True).start()
     
     try:
         while True:
             if proactive_trigger_flag.is_set():
                 proactive_trigger_flag.clear()
-                res = call_openclaw("看到我了吗？打个招呼吧", is_proactive=True)
+                res = call_openclaw("打个主动招呼", is_proactive=True)
                 if res["type"] == "text": speak(res["content"])
                 continue
 
@@ -242,6 +266,9 @@ def run_voice_assistant():
                 elif res["type"] == "tool_call":
                     app.title = STATUS_ACTION
                     speak(f"好的，我在帮您执行：{', '.join([c['function']['name'] for c in res['calls']])}")
+                elif res["type"] == "error":
+                    print(f"❌ 错误: {res['content']}")
+                    speak("哎呀，小德的脑袋开了一会儿小差，请再试一次吧 🐻")
                 
                 if i_p and os.path.exists(i_p): os.remove(i_p)
                 if ENABLE_MEMORY: threading.Thread(target=memory_manager.extract_and_save_facts, args=(text, str(res)), daemon=True).start()
