@@ -15,6 +15,8 @@ import threading
 import rumps
 import random
 import datetime
+import torch
+import warnings
 from onnxruntime import InferenceSession
 
 from config import *
@@ -153,9 +155,17 @@ def audio_to_text(audio_data):
     wf.close()
     
     # 识别
-    result = whisper_model.transcribe("/tmp/recording.wav", language="zh")
-    os.remove("/tmp/recording.wav")
-    return result["text"]
+    try:
+        # 强制禁用梯度，防止某些库冲突导致的问题
+        with torch.no_grad():
+            result = whisper_model.transcribe("/tmp/recording.wav", language="zh")
+        os.remove("/tmp/recording.wav")
+        return result["text"]
+    except Exception as e:
+        print(f"⚠️ 语音识别过程出错: {e}")
+        if os.path.exists("/tmp/recording.wav"):
+            os.remove("/tmp/recording.wav")
+        return ""
 
 def get_time_greeting():
     """获取时间相关的问候语"""
@@ -244,11 +254,10 @@ def clean_text_for_tts(text):
     text = re.sub(r'[`>]', '', text)
     # 移除链接格式 [text](url) -> text
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-    # 移除 Emoji (简单范围匹配)
-    # 方案1: 移除所有非 ASCII 字符（如 Emoji）
-    text = text.encode('ascii', 'ignore').decode('ascii') 
-    # 方案2: 更好的 Unicode 范围过滤
-    text = re.sub(r'[^\u0000-\u05C0\u2100-\u214F\u4E00-\u9FFF\u3040-\u30FF\uff00-\uffef]', '', text) 
+    # 移除 Emoji (通过匹配 Unicode 非基本平面字符)
+    text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
+    # 移除特殊的 Unicode 符号 (可选，保留核心标点)
+    text = re.sub(r'[^\u0000-\u05C0\u2100-\u214F\u4E00-\u9FFF\u3040-\u30FF\uff00-\uffef\s]', '', text) 
     # 压缩空白
     text = re.sub(r'\s+', ' ', text).strip()
     return text
