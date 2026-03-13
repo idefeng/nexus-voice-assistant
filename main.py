@@ -245,8 +245,9 @@ def clean_text_for_tts(text):
     # 移除链接格式 [text](url) -> text
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
     # 移除 Emoji (简单范围匹配)
-    text = text.encode('soft-ascii', 'ignore').decode('ascii') # 方案1: 暴力去除非 ASCII
-    # 方案2: 更好的 Unicode 范围过滤 (由于 Python re 限制，通常使用更广泛的正则或专门库，这里先用基础正则)
+    # 方案1: 移除所有非 ASCII 字符（如 Emoji）
+    text = text.encode('ascii', 'ignore').decode('ascii') 
+    # 方案2: 更好的 Unicode 范围过滤
     text = re.sub(r'[^\u0000-\u05C0\u2100-\u214F\u4E00-\u9FFF\u3040-\u30FF\uff00-\uffef]', '', text) 
     # 压缩空白
     text = re.sub(r'\s+', ' ', text).strip()
