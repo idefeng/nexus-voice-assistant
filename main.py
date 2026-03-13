@@ -48,10 +48,12 @@ STATUS_THINKING = "🤔"
 STATUS_SPEAKING = "🗣️"
 STATUS_ACTION = "⚙️"
 STATUS_LOCKED = "🔒"
+STATUS_SLEEPING = "🌙"
 
 NATURAL_FILLERS = ["嗯...", "我想想...", "好的，我明白了。", "让我想一下。"]
 
 # 全局状态
+is_sleeping = False
 current_speaker_process = [None]
 last_interaction_time = time.time()
 proactive_cooldown = 120 
@@ -173,6 +175,9 @@ def is_authorized(current_embedding):
 def proactive_intelligence_loop():
     global last_interaction_time
     while True:
+        if is_sleeping:
+            time.sleep(5)
+            continue
         try:
             now = datetime.datetime.now()
             for r in scheduled_reminders:
@@ -375,6 +380,7 @@ def run_voice_assistant():
 
             is_triggered = False
             if not follow_up:
+                # 检查唤醒词
                 try:
                     pcm_data = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
                 except OSError as e:
@@ -383,6 +389,13 @@ def run_voice_assistant():
                     raise e
                 pcm = struct.unpack_from("h" * porcupine.frame_length, pcm_data)
                 is_triggered = porcupine.process(pcm) >= 0
+                
+                # 如果是唤醒触发，解除休眠 (v7.3.0)
+                if is_triggered and is_sleeping:
+                    global is_sleeping
+                    is_sleeping = False
+                    print("🌅 小德已被唤醒，正在解除休眠...")
+                    app.title = STATUS_IDLE
             else:
                 is_triggered = True
 
@@ -419,6 +432,17 @@ def run_voice_assistant():
                 
                 print(f"👤 你说：{text}")
                 
+                # 休眠指令识别 (v7.3.0)
+                sleep_keywords = ["待机", "退出", "你先等等", "睡觉吧", "休眠", "退下"]
+                if any(k in text for k in sleep_keywords):
+                    speak("好的德哥，我先休息啦。有需要随时喊我。🐻")
+                    global is_sleeping
+                    is_sleeping = True
+                    app.title = STATUS_SLEEPING
+                    follow_up = False
+                    print("🌙 小德进入休眠状态。静默感知已开启。")
+                    continue
+
                 i_p = "/tmp/s.png" if any(k in text for k in ["看下屏幕", "内容", "分析"]) else None
                 if i_p: 
                     print("📸 [动作] 正在获取屏幕快照...")
