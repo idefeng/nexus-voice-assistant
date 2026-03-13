@@ -200,19 +200,25 @@ def call_openclaw(text, emotion=None):
             ]
         }
         
-        response = requests.post(OPENCLAW_API_URL, json=payload, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if "choices" in result and len(result["choices"]) > 0:
-                return result["choices"][0]["message"]["content"]
-            return "抱歉，我听到了你的问题，但没有得到有效回复。"
-        else:
-            print(f"❌ OpenClaw返回错误: {response.status_code} - {response.text}")
-            return "抱歉，我现在无法回答你的问题。"
+        # 增加重试机制和延长超时到 120s
+        for attempt in range(3):
+            try:
+                response = requests.post(OPENCLAW_API_URL, json=payload, headers=headers, timeout=120)
+                if response.status_code == 200:
+                    result = response.json()
+                    if "choices" in result and len(result["choices"]) > 0:
+                        return result["choices"][0]["message"]["content"]
+                    return "抱歉，我听到了你的问题，但没有得到有效回复。"
+                else:
+                    print(f"❌ OpenClaw返回错误 (尝试 {attempt+1}/3): {response.status_code}")
+                    if attempt == 2: return "抱歉，我现在无法回答你的问题。"
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                print(f"⚠️ OpenClaw连接超时或错误 (尝试 {attempt+1}/3): {e}")
+                if attempt == 2: return f"抱歉，网络连接超时，请检查服务状态。"
+            
     except Exception as e:
         print(f"❌ OpenClaw调用失败: {e}")
-        return "网络连接出现问题，请稍后再试。"
+        return "发生未知错误，请稍后再试。"
 
 async def _edge_speak(text):
     """内部异步语音合成函数"""
@@ -320,11 +326,16 @@ def run_voice_assistant():
                     app.title = STATUS_IDLE
                     continue
                 
-                # 5. 等待视觉分析线程结束（如果还在运行）以获取最新的情绪
+                # 5. 对于可能耗时较长的请求（如新闻、搜索），提供先行反馈
+                thinking_keywords = ["新闻", "播报", "查询", "最近", "搜索", "看下"]
+                if any(k in text for k in thinking_keywords):
+                    speak("好的，正在为您查阅，请稍等...")
+
+                # 6. 等待视觉分析线程结束（如果还在运行）以获取最新的情绪
                 vision_thread.join(timeout=2.0)
                 emotion = emotion_result[0]
                 
-                # 6. 调用OpenClaw并带入情绪内容（不再单独语音播报情绪，由LLM在回复中体现）
+                # 7. 调用OpenClaw并带入情绪内容（不再单独语音播报情绪，由LLM在回复中体现）
                 response = call_openclaw(text, emotion)
                 speak(response, with_filler=True)
                 
