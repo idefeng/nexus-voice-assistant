@@ -50,6 +50,8 @@ STATUS_ACTION = "⚙️"
 STATUS_LOCKED = "🔒"
 STATUS_SLEEPING = "🌙"
 
+NATURAL_FILLERS = ["嗯...", "我想想...", "好的，我明白了。", "让我想一下。"]
+
 # 全局状态
 is_sleeping = False
 current_speaker_process = [None]
@@ -377,6 +379,8 @@ def speak(text, with_filler=False):
     app.title = STATUS_SPEAKING
     if current_speaker_process[0] and current_speaker_process[0].poll() is None:
         current_speaker_process[0].terminate()
+    if with_filler and random.random() < 0.3:
+        asyncio.run(_stream_speak(random.choice(NATURAL_FILLERS)))
     import re
     segs = [s.strip() for s in re.split(r'([。！？\n])', text) if s.strip()]
     for seg in segs or [text]:
