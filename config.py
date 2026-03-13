@@ -39,5 +39,9 @@ CAMERA_ID = 0
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
+# Personlization & Security (v6.0.0)
+MASTER_FACE_EMBEDDING_PATH = "./models/master_face.npy"
+FACE_SIMILARITY_THRESHOLD = 0.65 # 阈值越大人脸识别越严格
+
 # TTS配置
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
