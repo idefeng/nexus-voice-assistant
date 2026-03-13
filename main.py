@@ -531,12 +531,17 @@ def run_voice_assistant():
 if __name__ == "__main__":
     if ENABLE_UI:
         if UI_TYPE == "flet":
-            threading.Thread(target=start_flet_ui, args=(ui.state_queue,), daemon=True).start()
+            print("🚀 正在启动 Flet UI...")
+            threading.Thread(target=run_voice_assistant, daemon=True).start()
+            start_flet_ui(ui.state_queue)
+            sys.exit(0)
         elif UI_TYPE == "rumps":
+            print("🚀 正在启动 Rumps UI...")
             app = VoiceAssistantApp()
             ui.set_ui_instance(app)
             threading.Thread(target=run_voice_assistant, daemon=True).start()
             app.run()
             sys.exit(0)
 
+    print("🚀 正在启动纯命令行模式...")
     run_voice_assistant()
