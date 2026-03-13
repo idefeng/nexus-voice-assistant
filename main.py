@@ -284,7 +284,22 @@ def run_voice_assistant():
             if keyword_index >= 0:
                 print("\n🎉 唤醒成功！")
                 
-                # 每日首次唤醒礼
+                # 1. 立即启动异步视觉分析（不阻塞主链路）
+                emotion_result = [None] # 使用列表作为闭包容器获取线程结果
+                def background_vision():
+                    try:
+                        if ENABLE_FACE_RECOGNITION and ENABLE_EMOTION_ANALYSIS:
+                            _, emotion = detect_face_and_emotion()
+                            emotion_result[0] = emotion
+                            if emotion:
+                                print(f"😊 [后台识别结果] 情绪：{emotion}")
+                    except Exception as e:
+                        print(f"⚠️ 视觉分析后台异常: {e}")
+
+                vision_thread = threading.Thread(target=background_vision)
+                vision_thread.start()
+
+                # 2. 每日首次唤醒礼
                 if is_first_run:
                     greeting = get_time_greeting()
                     speak(greeting)
@@ -292,20 +307,11 @@ def run_voice_assistant():
                 else:
                     speak("我在呢")
                 
-                # 检测人脸和情绪
-                app.title = STATUS_THINKING
-                emotion = None
-                if ENABLE_FACE_RECOGNITION and ENABLE_EMOTION_ANALYSIS:
-                    face, emotion = detect_face_and_emotion()
-                    if emotion:
-                        print(f"😊 当前情绪：{emotion}")
-                        speak(f"检测到你现在的状态是{emotion}")
-                
-                # 录制语音
+                # 3. 立即进入录音状态（录音时长受 MAX_RECORD_SECONDS 限制，并有静音检测）
                 app.title = STATUS_LISTENING
                 audio_data = record_audio(MAX_RECORD_SECONDS)
                 
-                # 语音转文字
+                # 4. 语音转文字
                 text = audio_to_text(audio_data)
                 print(f"👤 你说：{text}")
                 
@@ -314,7 +320,11 @@ def run_voice_assistant():
                     app.title = STATUS_IDLE
                     continue
                 
-                # 调用OpenClaw (传入 True 以使用自然语气词)
+                # 5. 等待视觉分析线程结束（如果还在运行）以获取最新的情绪
+                vision_thread.join(timeout=2.0)
+                emotion = emotion_result[0]
+                
+                # 6. 调用OpenClaw并带入情绪内容（不再单独语音播报情绪，由LLM在回复中体现）
                 response = call_openclaw(text, emotion)
                 speak(response, with_filler=True)
                 
