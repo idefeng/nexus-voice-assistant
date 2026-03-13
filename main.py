@@ -245,7 +245,7 @@ def audio_to_text(audio_data):
         if os.path.exists(wf): os.remove(wf)
         return ""
 
-def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=False, p_mode="greeting"):
+def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=False, p_mode="greeting", is_tired=False):
     app.title = STATUS_THINKING
     try:
         mem = ""
@@ -281,6 +281,10 @@ def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=
         if emo_context: sys_p += f"\n【历史情感背景】{emo_context}"
         
         if mem: sys_p += f"\n背景记忆：{mem}"
+        
+        # 疲劳状态硬性注入 (v7.3.2)
+        if is_tired or p_mode == "fatigue_care":
+            sys_p += "\n【特别声明】检测到主人当前处于疲劳状态（闭眼频率高/EAR低）。请在回复的开头或结尾，用最窝心的方式明确提到“检测到您有点疲劳”，并劝导主人休息或喝点水。"
         
         user_c = []
         if image_path:
@@ -447,7 +451,7 @@ def run_voice_assistant():
                     print("📸 [动作] 正在获取屏幕快照...")
                     subprocess.run(["screencapture", "-x", i_p])
                 
-                res = call_openclaw(text, face_res['emotion'], i_p, history)
+                res = call_openclaw(text, face_res['emotion'], i_p, history, is_tired=face_res['tired'])
                 if res["type"] == "text":
                     print(f"🐻 小德：{res['content']}")
                     speak(res["content"], with_filler=True)
