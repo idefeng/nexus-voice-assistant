@@ -143,11 +143,11 @@ def detect_face_and_emotion():
         cap.release()
         if not ret: 
             print("⚠️ [感知] 摄像头读取失败")
-            return None, None, None
+            return None, None, None, False
         faces = face_analyzer.get(frame)
         if len(faces) == 0: 
             print("⚠️ [感知] 未检测到人脸")
-            return None, None, None
+            return None, None, None, False
         
         face = faces[0]
         face_img = cv2.resize(frame, (64, 64))
@@ -356,8 +356,9 @@ class VoiceAssistantApp(rumps.App):
     def restart(self, _): os.execv(sys.executable, ['python'] + sys.argv)
 
 def run_voice_assistant():
+    global is_sleeping
     history = []
-    print("✅ 小德 v7.2.0 已就绪...")
+    print("✅ 小德 v7.3.1 (Hotfix) 已就绪...")
     threading.Thread(target=proactive_intelligence_loop, daemon=True).start()
     
     follow_up = False 
@@ -392,7 +393,6 @@ def run_voice_assistant():
                 
                 # 如果是唤醒触发，解除休眠 (v7.3.0)
                 if is_triggered and is_sleeping:
-                    global is_sleeping
                     is_sleeping = False
                     print("🌅 小德已被唤醒，正在解除休眠...")
                     app.title = STATUS_IDLE
@@ -436,7 +436,6 @@ def run_voice_assistant():
                 sleep_keywords = ["待机", "退出", "你先等等", "睡觉吧", "休眠", "退下"]
                 if any(k in text for k in sleep_keywords):
                     speak("好的德哥，我先休息啦。有需要随时喊我。🐻")
-                    global is_sleeping
                     is_sleeping = True
                     app.title = STATUS_SLEEPING
                     follow_up = False
