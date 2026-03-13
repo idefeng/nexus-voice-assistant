@@ -105,7 +105,7 @@ def record_audio(max_duration):
     frames = []
     CHUNK_SIZE = porcupine.frame_length
     SILENCE_THRESHOLD = 500
-    SILENCE_DURATION = 1.5
+    SILENCE_DURATION = 1.0  # (v4.0.0) 缩短静音检测时间，提升响应
     silence_frames_limit = int(porcupine.sample_rate / CHUNK_SIZE * SILENCE_DURATION)
     silence_counter = 0
     recorded_frames = 0
@@ -119,7 +119,7 @@ def record_audio(max_duration):
             energy = np.abs(pcm_unpacked).mean()
             if energy < SILENCE_THRESHOLD: silence_counter += 1
             else: silence_counter = 0
-            if recorded_frames > int(porcupine.sample_rate / CHUNK_SIZE * 3) and silence_counter > silence_frames_limit:
+            if recorded_frames > int(porcupine.sample_rate / CHUNK_SIZE * 0.5) and silence_counter > silence_frames_limit:
                 break
         except: break
     return b''.join(frames)
@@ -127,7 +127,6 @@ def record_audio(max_duration):
 def audio_to_text(audio_data):
     """语音转文字"""
     app.title = STATUS_THINKING
-    print("✍️  识别中...")
     import wave
     wf = wave.open("/tmp/recording.wav", 'wb')
     wf.setnchannels(CHANNELS)
@@ -144,16 +143,9 @@ def audio_to_text(audio_data):
         if os.path.exists("/tmp/recording.wav"): os.remove("/tmp/recording.wav")
         return ""
 
-def get_time_greeting():
-    """获取时间相关的问候语"""
-    hour = datetime.datetime.now().hour
-    if 5 <= hour < 12: return "早安，我是小德 🐻，很高兴见到你！"
-    else: return "你好，我是小德 🐻，今天过得好吗？"
-
 def capture_screen():
     """执行 macOS 静默截图"""
     output_path = "/tmp/screen.png"
-    print("📸  正在捕捉屏幕内容...")
     try:
         subprocess.run(["screencapture", "-x", output_path], check=True)
         return output_path
@@ -174,7 +166,7 @@ def call_openclaw(text, emotion=None, image_path=None, history=[]):
         if not history and ENABLE_MEMORY and memory_manager:
             memory_context = memory_manager.query_memory(text)
         
-        system_prompt = "你是一个名叫小德 (Xiaode) 的助手，形象是 🐻。你可以使用工具来执行命令（如打开应用、搜索、管理文件）。优先尝试解决问题，如果涉及危险操作请先询问用户。"
+        system_prompt = "你是一个名叫小德 (Xiaode) 的助手，形象是 🐻。你可以使用工具来执行命令。优先尝试解决问题。"
         if memory_context: system_prompt += f"\n这是关于用户的一些背景记忆：\n{memory_context}"
         
         user_content = []
@@ -189,21 +181,19 @@ def call_openclaw(text, emotion=None, image_path=None, history=[]):
         if not OPENCLAW_CHANNEL or not OPENCLAW_ACCOUNT: routing_id = SESSION_KEY
             
         payload = {
-            "model": routing_id,
-            "messages": [{"role": "system", "content": system_prompt}] + history + [user_msg],
-            "tools": "auto"
+            "model": routing_id, "messages": [{"role": "system", "content": system_prompt}] + history + [user_msg], "tools": "auto"
         }
         headers = {"Authorization": f"Bearer {OPENCLAW_TOKEN}", "Content-Type": "application/json"}
         response = requests.post(OPENCLAW_API_URL, json=payload, headers=headers, timeout=120)
         if response.status_code == 200:
             choice = response.json()["choices"][0]["message"]
             if "tool_calls" in choice:
-                return {"type": "tool_call", "calls": choice["tool_calls"], "raw_message": choice}
+                return {"type": "tool_call", "calls": choice["tool_calls"]}
             return {"type": "text", "content": choice.get("content", "")}
         return {"type": "error", "content": "抱歉，无法回复。"}
     except Exception as e:
         print(f"❌ 调用失败: {e}")
-        return {"type": "error", "content": "发生未知错误。"}
+        return {"type": "error", "content": "网络或服务异常。"}
 
 def clean_text_for_tts(text):
     """清理播报文本"""
@@ -213,47 +203,57 @@ def clean_text_for_tts(text):
     text = re.sub(r'[`>]', '', text)
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
     text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
-    text = re.sub(r'[^\u0000-\u05C0\u2100-\u214F\u4E00-\u9FFF\u3040-\u30FF\uff00-\uffef\s]', '', text) 
     return re.sub(r'\s+', ' ', text).strip()
 
-async def _edge_speak(text):
-    """播报音频"""
+async def _stream_speak(text):
+    """(v4.0.0) 实时流式播报：边生成边播放"""
     communicate = edge_tts.Communicate(text, TTS_VOICE)
-    temp_file = f"/tmp/reply_{random.randint(1000, 9999)}.mp3"
-    await communicate.save(temp_file)
-    proc = subprocess.Popen(["afplay", temp_file])
-    current_speaker_process[0] = proc
-    proc.wait()
-    current_speaker_process[0] = None
-    if os.path.exists(temp_file): os.remove(temp_file)
+    # ffplay 是实现流式音频播放的最佳选择
+    # -nodisp: 不显示窗口, -autoexit: 播放结束自动退出, -loglevel quiet: 静默
+    ffplay_cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-i", "pipe:0"]
+    try:
+        proc = subprocess.Popen(ffplay_cmd, stdin=subprocess.PIPE)
+        current_speaker_process[0] = proc
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                try:
+                    proc.stdin.write(chunk["data"])
+                except (BrokenPipeError, OSError):
+                    break
+        if proc.stdin: proc.stdin.close()
+        proc.wait()
+    except Exception as e:
+        print(f"⚠️ 流式播放异常: {e}")
+    finally:
+        current_speaker_process[0] = None
 
 def stop_speaking():
-    """停止播报"""
+    """打断播报"""
     if current_speaker_process[0] and current_speaker_process[0].poll() is None:
         print("🛑 打断。")
         current_speaker_process[0].terminate()
         current_speaker_process[0] = None
 
 def speak(text, with_filler=False):
-    """流利播报"""
+    """流利播报逻辑"""
     if not text: return
     app.title = STATUS_SPEAKING
     stop_speaking()
-    if with_filler and random.random() < 0.4:
-        asyncio.run(_edge_speak(random.choice(NATURAL_FILLERS)))
+    if with_filler and random.random() < 0.3:
+        asyncio.run(_stream_speak(random.choice(NATURAL_FILLERS)))
+    
     print(f"🤖 小德：{text}")
     import re
-    segments = re.split(r'([。！？\n])', text)
+    # 依然保留分段逻辑，但内部使用流式播放以降低单段延迟
+    segments = [s.strip() for s in re.split(r'([。！？\n])', text) if s.strip()]
     final_segments = []
     for i in range(0, len(segments)-1, 2):
-        item = segments[i] + segments[i+1]
-        if len(item.strip()) > 1: final_segments.append(item.strip())
-    if len(segments) % 2 == 1:
-        last = segments[-1].strip()
-        if len(last) > 1: final_segments.append(last)
+        final_segments.append(segments[i] + segments[i+1])
+    if len(segments) % 2 == 1: final_segments.append(segments[-1])
+    
     for seg in final_segments or [text]:
         clean_seg = clean_text_for_tts(seg)
-        if clean_seg: asyncio.run(_edge_speak(clean_seg))
+        if clean_seg: asyncio.run(_stream_speak(clean_seg))
     app.title = STATUS_IDLE
 
 class VoiceAssistantApp(rumps.App):
@@ -262,15 +262,15 @@ class VoiceAssistantApp(rumps.App):
         self.menu = ["关于小德", "重启助手"]
     @rumps.clicked("关于小德")
     def about(self, _):
-        rumps.alert("小德 v3.0.1\n您的温馨数字副官 🐻⚙️")
+        rumps.alert("小德 v4.0.0\n极致交互版 🐻⚡")
     @rumps.clicked("重启助手")
     def restart(self, _):
         os.execv(sys.executable, ['python'] + sys.argv)
 
 def run_voice_assistant():
-    """主逻辑"""
+    """主逻辑循环"""
     history = []
-    print("✅ 小德已就绪...")
+    print("✅ 小德 v4.0.0 已就绪...")
     app.title = STATUS_IDLE
     try:
         while True:
@@ -280,20 +280,20 @@ def run_voice_assistant():
                 print("\n🎉 唤醒成功！")
                 stop_speaking()
                 e_res = [None]
-                def b_vision():
+                def b_v():
                     try:
                         if ENABLE_FACE_RECOGNITION and ENABLE_EMOTION_ANALYSIS:
                             _, em = detect_face_and_emotion(); e_res[0] = em
                     except: pass
-                threading.Thread(target=b_vision).start()
-                speak("小德在呢 🐻")
+                threading.Thread(target=b_v).start()
+                speak("我在呢 🐻")
                 app.title = STATUS_LISTENING
                 audio_data = record_audio(MAX_RECORD_SECONDS)
                 text = audio_to_text(audio_data)
                 if not text.strip(): continue
                 print(f"👤 你说：{text}")
-                i_path = capture_screen() if any(k in text for k in ["看下屏幕", "这是什么", "分析内容"]) else None
-                if i_path: speak("好的，我这只小熊 🐻 帮你瞅瞅。")
+                i_path = capture_screen() if any(k in text for k in ["看下屏幕", "内容", "分析"]) else None
+                if i_path: speak("好的，我看看。")
                 res = call_openclaw(text, e_res[0], i_path, history)
                 if res["type"] == "text":
                     speak(res["content"], with_filler=True)
@@ -301,19 +301,16 @@ def run_voice_assistant():
                     history.append({"role": "assistant", "content": res["content"]})
                 elif res["type"] == "tool_call":
                     app.title = STATUS_ACTION
-                    action_desc = f"我正准备帮您执行：{', '.join([c['function']['name'] for c in res['calls']])}，正在处理..."
-                    speak(action_desc)
+                    speak(f"我正准备帮您执行：{', '.join([c['function']['name'] for c in res['calls']])}")
                 if i_path and os.path.exists(i_path): os.remove(i_path)
                 if ENABLE_MEMORY and memory_manager:
                     threading.Thread(target=memory_manager.extract_and_save_facts, args=(text, str(res)), daemon=True).start()
                 app.title = STATUS_IDLE
                 if len(history) > 10: history = history[-10:]
     except Exception as e:
-        print(f"❌ 运行错误: {e}")
+        print(f"❌ 运行异常: {e}")
     finally:
-        audio_stream.close()
-        pa.terminate()
-        porcupine.delete()
+        audio_stream.close(); pa.terminate(); porcupine.delete()
 
 if __name__ == "__main__":
     app = VoiceAssistantApp()
