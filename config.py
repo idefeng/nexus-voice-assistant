@@ -4,7 +4,8 @@ OPENCLAW_TOKEN = "b5993a1fab396eb87cf92a6ab8c6e4962d198d2409b3714a"
 SESSION_KEY = "scholar"  # 使用Agent ID作为模型名
 
 # 唤醒词配置
-WAKE_WORD_PATH = "./models/nihaoxiaode_osx.ppn"
+WAKE_WORD_PATH = "./models/小德_zh_mac_v4_0_0.ppn"
+PORCUPINE_MODEL_PATH = "./models/porcupine_params_zh.pv"
 PORCUPINE_ACCESS_KEY = "nApLVOOz0OFhReQa62OKtQs7fYsFxcDx1EcTyC/MW8x6q2M2xS6TxQ=="  # 已自动填充
 
 # 功能开关

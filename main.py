@@ -49,7 +49,8 @@ print("🔔 初始化唤醒引擎...")
 try:
     porcupine = pvporcupine.create(
         access_key=PORCUPINE_ACCESS_KEY,
-        keyword_paths=[WAKE_WORD_PATH]
+        keyword_paths=[WAKE_WORD_PATH],
+        model_path=PORCUPINE_MODEL_PATH
     )
 except Exception as e:
     print(f"⚠️ 无法加载自定义唤醒词 {WAKE_WORD_PATH}: {e}")
