@@ -12,6 +12,7 @@ PORCUPINE_ACCESS_KEY = "nApLVOOz0OFhReQa62OKtQs7fYsFxcDx1EcTyC/MW8x6q2M2xS6TxQ==
 ENABLE_VOICE_RECOGNITION = True
 ENABLE_FACE_RECOGNITION = True
 ENABLE_EMOTION_ANALYSIS = True
+ENABLE_MEMORY = True  # v2.0.0 长期记忆开关
 
 # 音频配置
 SAMPLERATE = 16000
@@ -21,6 +22,10 @@ MAX_RECORD_SECONDS = 30  # 支持长句子收录
 
 # 模型配置
 WHISPER_MODEL = "medium"  # 升级到 medium 以获得更好识别精度
+
+# 数据库路径
+MEMORY_DB_PATH = "./memory_db"
+MEMORY_COLLECTION_NAME = "asxin_memories"
 
 # 摄像头配置
 CAMERA_ID = 0
