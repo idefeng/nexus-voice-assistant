@@ -50,8 +50,6 @@ STATUS_ACTION = "⚙️"
 STATUS_LOCKED = "🔒"
 STATUS_SLEEPING = "🌙"
 
-NATURAL_FILLERS = ["嗯...", "我想想...", "好的，我明白了。", "让我想一下。"]
-
 # 全局状态
 is_sleeping = False
 current_speaker_process = [None]
@@ -379,8 +377,6 @@ def speak(text, with_filler=False):
     app.title = STATUS_SPEAKING
     if current_speaker_process[0] and current_speaker_process[0].poll() is None:
         current_speaker_process[0].terminate()
-    if with_filler and random.random() < 0.3:
-        asyncio.run(_stream_speak(random.choice(NATURAL_FILLERS)))
     import re
     segs = [s.strip() for s in re.split(r'([。！？\n])', text) if s.strip()]
     for seg in segs or [text]:
@@ -484,7 +480,6 @@ def run_voice_assistant():
                     if face_res["emb"] is None or not is_authorized(face_res["emb"]):
                         print("🚫 身份验证未通过，拒绝交互。")
                         app.title = STATUS_LOCKED
-                        speak("抱歉德哥，我现在只听主人的话哦。你是谁呀？🐻")
                         follow_up = False; continue
                 
                 print(f"👤 你说：{text}")
@@ -492,7 +487,6 @@ def run_voice_assistant():
                 # 休眠指令识别 (v7.3.0)
                 sleep_keywords = ["待机", "退出", "你先等等", "睡觉吧", "休眠", "退下"]
                 if any(k in text for k in sleep_keywords):
-                    speak("好的德哥，我先休息啦。有需要随时喊我。🐻")
                     is_sleeping = True
                     app.title = STATUS_SLEEPING
                     follow_up = False
@@ -511,10 +505,6 @@ def run_voice_assistant():
                     history.extend([{"role": "user", "content": text}, {"role": "assistant", "content": res["content"]}])
                     follow_up = True
                     app.title = "👂"
-                elif res["type"] == "tool_call":
-                    app.title = STATUS_ACTION
-                    speak(f"好的，帮您执行：{', '.join([c['function']['name'] for c in res['calls']])}")
-                    follow_up = False
                 else:
                     follow_up = False
                 
