@@ -197,20 +197,29 @@ def proactive_intelligence_loop():
             time.sleep(10)
         except: time.sleep(10)
 
-def record_audio(max_duration):
+def record_audio(max_duration, is_follow_up=False):
     frames = []
     CHUNK_SIZE = porcupine.frame_length
-    SILENCE_THRESHOLD, SILENCE_DURATION = 500, 1.0
+    SILENCE_THRESHOLD = 500
+    SILENCE_DURATION = 0.8 if is_follow_up else 1.2
+    
+    # 特殊逻辑：如果是连续对话，起始静音判定需要极短
     limit = int(porcupine.sample_rate / CHUNK_SIZE * SILENCE_DURATION)
+    total_timeout = int(porcupine.sample_rate / CHUNK_SIZE * (FOLLOW_UP_TIMEOUT if is_follow_up else max_duration))
+    
     counter, recorded = 0, 0
-    max_f = int(porcupine.sample_rate / CHUNK_SIZE * max_duration)
-    while recorded < max_f:
+    while recorded < total_timeout:
         try:
             data = audio_stream.read(CHUNK_SIZE, exception_on_overflow=False)
             frames.append(data); recorded += 1
             energy = np.abs(struct.unpack_from("h" * CHUNK_SIZE, data)).mean()
             if energy < SILENCE_THRESHOLD: counter += 1
             else: counter = 0
+            
+            # 连续对话特殊逻辑：如果一开始就长时间静音，提前结束
+            if is_follow_up and recorded > int(porcupine.sample_rate / CHUNK_SIZE * 3.0) and counter == recorded:
+                return None # 表示没有追问
+
             if recorded > int(porcupine.sample_rate / CHUNK_SIZE * 0.5) and counter > limit: break
         except Exception as e:
             print(f"⚠️ 录音读取中断: {e}")
@@ -343,51 +352,61 @@ class VoiceAssistantApp(rumps.App):
 
 def run_voice_assistant():
     history = []
-    print("✅ 小德 v6.0.0 已就绪...")
+    print("✅ 小德 v7.2.0 已就绪...")
     threading.Thread(target=proactive_intelligence_loop, daemon=True).start()
+    
+    follow_up = False 
     
     try:
         while True:
             if proactive_trigger_flag.is_set():
+                follow_up = False
                 proactive_trigger_flag.clear()
                 mode = proactive_type[0]
                 i_p = "/tmp/p_s.png" if mode == "screen_insight" else None
                 if i_p: 
-                    print("📸 [动作] 正在获取屏幕快照...")
-                    cp_res = subprocess.run(["screencapture", "-x", i_p])
-                    if cp_res.returncode != 0:
-                        print("⚠️ [动作] 屏幕快照获取失败")
-                        i_p = None
+                    subprocess.run(["screencapture", "-x", i_p])
                 res = call_openclaw("打个招呼吧", is_proactive=True, p_mode=mode, image_path=i_p)
-                if res["type"] == "text": speak(res["content"])
+                if res["type"] == "text":
+                    print(f"🐻 小德 (主动): {res['content']}")
+                    speak(res["content"])
                 if i_p and os.path.exists(i_p): os.remove(i_p)
                 continue
 
-            try:
-                pcm_data = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
-            except OSError as e:
-                if e.errno == -9981 or "Unknown Error" in str(e): # 兼容 macOS 偶发音频错误
-                    time.sleep(0.1)
-                    continue
-                raise e
-                
-            pcm = struct.unpack_from("h" * porcupine.frame_length, pcm_data)
-            if porcupine.process(pcm) >= 0:
+            is_triggered = False
+            if not follow_up:
+                try:
+                    pcm_data = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
+                except OSError as e:
+                    if e.errno == -9981 or "Unknown Error" in str(e):
+                        time.sleep(0.1); continue
+                    raise e
+                pcm = struct.unpack_from("h" * porcupine.frame_length, pcm_data)
+                is_triggered = porcupine.process(pcm) >= 0
+            else:
+                is_triggered = True
+
+            if is_triggered:
                 global last_interaction_time
                 last_interaction_time = time.time()
                 
-                # 视觉身份/情绪/疲劳检测 (v7.1.0)
                 face_res = {"face": None, "emotion": "平静", "emb": None, "tired": False}
                 def b_vision():
                     f, e, m, t = detect_face_and_emotion()
                     if f: face_res.update({"face": f, "emotion": e, "emb": m, "tired": t})
                 vt = threading.Thread(target=b_vision); vt.start()
                 
-                speak("我在呢 🐻")
+                if not follow_up:
+                    speak("我在呢 🐻")
+                
                 app.title = STATUS_LISTENING
-                audio = record_audio(MAX_RECORD_SECONDS)
+                audio = record_audio(MAX_RECORD_SECONDS, is_follow_up=follow_up)
+                if audio is None: 
+                    follow_up = False; app.title = STATUS_IDLE; continue
+                
                 text = audio_to_text(audio)
-                if not text.strip(): continue
+                if not text or not text.strip(): 
+                    follow_up = False; app.title = STATUS_IDLE; continue
                 
                 vt.join(timeout=1.5)
                 # 鉴权逻辑
@@ -396,26 +415,28 @@ def run_voice_assistant():
                         print("🚫 身份验证未通过，拒绝交互。")
                         app.title = STATUS_LOCKED
                         speak("抱歉德哥，我现在只听主人的话哦。你是谁呀？🐻")
-                        continue
+                        follow_up = False; continue
                 
-                print(f"😊 [身份核验通过] 情绪：{face_res['emotion']}")
                 print(f"👤 你说：{text}")
                 
                 i_p = "/tmp/s.png" if any(k in text for k in ["看下屏幕", "内容", "分析"]) else None
                 if i_p: 
                     print("📸 [动作] 正在获取屏幕快照...")
-                    cp_res = subprocess.run(["screencapture", "-x", i_p])
-                    if cp_res.returncode != 0:
-                        print("⚠️ [动作] 屏幕快照获取失败")
-                        i_p = None
+                    subprocess.run(["screencapture", "-x", i_p])
                 
                 res = call_openclaw(text, face_res['emotion'], i_p, history)
                 if res["type"] == "text":
+                    print(f"🐻 小德：{res['content']}")
                     speak(res["content"], with_filler=True)
                     history.extend([{"role": "user", "content": text}, {"role": "assistant", "content": res["content"]}])
+                    follow_up = True
+                    app.title = "👂"
                 elif res["type"] == "tool_call":
                     app.title = STATUS_ACTION
                     speak(f"好的，帮您执行：{', '.join([c['function']['name'] for c in res['calls']])}")
+                    follow_up = False
+                else:
+                    follow_up = False
                 
                 if i_p and os.path.exists(i_p): os.remove(i_p)
                 if ENABLE_MEMORY and memory_manager:

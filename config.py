@@ -45,3 +45,6 @@ FACE_SIMILARITY_THRESHOLD = 0.65 # 阈值越大人脸识别越严格
 
 # TTS配置
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
+
+# 交互配置 (v7.2.0)
+FOLLOW_UP_TIMEOUT = 6.0 # 连续对话监听时长
