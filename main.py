@@ -88,18 +88,26 @@ audio_stream = pa.open(
 )
 
 def detect_face_and_emotion():
+    print("📸 [感知] 正在开启摄像头...")
     cap = cv2.VideoCapture(CAMERA_ID)
     ret, frame = cap.read()
     cap.release()
-    if not ret: return None, None
+    if not ret: 
+        print("⚠️ [感知] 摄像头读取失败")
+        return None, None
     faces = face_analyzer.get(frame)
-    if len(faces) == 0: return None, None
+    if len(faces) == 0: 
+        print("⚠️ [感知] 未检测到人脸")
+        return None, None
+    print(f"👤 [感知] 检测到 {len(faces)} 张人脸")
     face_img = cv2.resize(frame, (64, 64))
     face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
     face_img = face_img.astype(np.float32) / 255.0
     face_img = np.expand_dims(np.expand_dims(face_img, axis=0), axis=0)
     outputs = emotion_session.run(None, {'Input3': face_img})
-    return faces[0], emotion_labels[np.argmax(outputs[0])]
+    emotion = emotion_labels[np.argmax(outputs[0])]
+    print(f"😐 [感知] 情绪识别结果：{emotion}")
+    return faces[0], emotion
 
 def proactive_intelligence_loop():
     """(v5.0.3) 主动智能：视觉问候 + 屏幕洞察"""
@@ -280,8 +288,8 @@ def run_voice_assistant():
                 text = audio_to_text(audio)
                 if not text.strip(): continue
                 
-                vision_thread.join(timeout=1.0)
-                print(f"😊 [身份/情绪识别] 情绪：{face_data['emotion']}")
+                vision_thread.join(timeout=1.5) # 稍微多给点时间
+                print(f"👤 [最终状态] 情绪：{face_data['emotion']}")
                 print(f"👤 你说：{text}")
                 
                 i_p = "/tmp/s.png" if any(k in text for k in ["看下屏幕", "内容", "分析"]) else None
