@@ -352,7 +352,12 @@ def run_voice_assistant():
                 print(f"👤 你说：{text}")
                 
                 i_p = "/tmp/s.png" if any(k in text for k in ["看下屏幕", "内容", "分析"]) else None
-                if i_p: subprocess.run(["screencapture", "-x", i_p])
+                if i_p: 
+                    print("📸 [动作] 正在获取屏幕快照...")
+                    cp_res = subprocess.run(["screencapture", "-x", i_p])
+                    if cp_res.returncode != 0:
+                        print("⚠️ [动作] 屏幕快照获取失败")
+                        i_p = None
                 
                 res = call_openclaw(text, face_res['emotion'], i_p, history)
                 if res["type"] == "text":
