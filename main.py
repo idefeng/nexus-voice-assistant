@@ -18,7 +18,7 @@ import datetime
 from onnxruntime import InferenceSession
 
 from config import *
-
+from memory_manager import memory_manager
 # 状态表情常量
 STATUS_IDLE = "💤"
 STATUS_LISTENING = "🎙️"
@@ -172,11 +172,21 @@ def get_time_greeting():
         return "太晚了，注意休息哦，德哥。"
 
 def call_openclaw(text, emotion=None):
-    """调用OpenClaw接口获取回复 (增强情感理解)"""
+    """调用OpenClaw接口获取回复 (增强情感识别与长期记忆)"""
     app.title = STATUS_THINKING
     try:
-        # 情感引导指令
+        # 1. 尝试从长期记忆中检索背景
+        memory_context = ""
+        if ENABLE_MEMORY and memory_manager:
+            memory_context = memory_manager.query_memory(text)
+            if memory_context:
+                print(f"📖 唤回记忆背景：{memory_context[:50]}...")
+
+        # 2. 构建系统 Prompt
         system_prompt = "你是一个亲切、聪明的助手，名叫阿信。"
+        if memory_context:
+            system_prompt += f"\n这是关于用户的一些背景记忆（仅供参考，不要直接复述）：\n{memory_context}"
+            
         if emotion:
             emotion_prompts = {
                 'happy': "用户现在心情很好，你的回复应该保持轻快、活泼，并分享这份快乐。",
@@ -338,6 +348,15 @@ def run_voice_assistant():
                 # 7. 调用OpenClaw并带入情绪内容（不再单独语音播报情绪，由LLM在回复中体现）
                 response = call_openclaw(text, emotion)
                 speak(response, with_filler=True)
+                
+                # 8. 对话结束后，在后台异步提取并保存新的记忆事实
+                if ENABLE_MEMORY and memory_manager:
+                    print("💭 正在同步背景记忆...")
+                    threading.Thread(
+                        target=memory_manager.extract_and_save_facts,
+                        args=(text, response),
+                        daemon=True
+                    ).start()
                 
                 print("\n✅ 回复完成，继续等待唤醒...")
                 app.title = STATUS_IDLE
