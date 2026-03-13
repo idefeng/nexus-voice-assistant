@@ -4,13 +4,12 @@ OPENCLAW_TOKEN = "b5993a1fab396eb87cf92a6ab8c6e4962d198d2409b3714a"
 
 # Advanced Routing (v2.4.0)
 # 格式: channel/accountId/agentId
-# 例如: "telegram/main/main" 或 "telegram/idf_childcare/project_childcare"
 OPENCLAW_CHANNEL = "telegram"
 OPENCLAW_ACCOUNT = "main"
 OPENCLAW_AGENT = "main"
 
-# 降级/基础配置
-SESSION_KEY = "scholar" 
+# 默认降级模型/Agent ID
+SESSION_KEY = "main" 
 
 # 唤醒词配置
 WAKE_WORD_PATH = "./models/小德_zh_mac_v4_0_0.ppn"
