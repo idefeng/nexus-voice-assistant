@@ -1,5 +1,5 @@
 import flet as ft
-from flet import colors, icons, FontWeight, ThemeMode
+from flet import FontWeight, ThemeMode
 import queue
 import threading
 import time
@@ -24,8 +24,8 @@ class FletUI:
         page.window_height = 600
         page.window_always_on_top = True
         page.theme_mode = ThemeMode.DARK
-        page.bgcolor = colors.TRANSPARENT
-        page.window_bgcolor = colors.TRANSPARENT
+        page.bgcolor = "transparent"
+        page.window_bgcolor = "transparent"
         page.window_title_bar_hidden = False # 开发阶段保留标题栏
         
         # 状态图标 (大大的 Emoji)
@@ -33,34 +33,35 @@ class FletUI:
         self.status_text = ft.Text("空闲中", size=20, weight=FontWeight.BOLD)
         
         # 实时识别文本
-        self.transcription_text = ft.Text("", size=16, color=colors.GREY_400, italic=True)
+        self.transcription_text = ft.Text("", size=16, color="grey400", italic=True)
         
         # AI 回复文本
-        self.response_text = ft.Text("", size=18, color=colors.WHITE)
+        self.response_text = ft.Text("", size=18, color="white")
 
         # 布局
         page.add(
             ft.Container(
                 content=ft.Column(
                     [
-                        ft.Divider(height=20, color=colors.TRANSPARENT),
+                        ft.Divider(height=20, color="transparent"),
                         ft.Row([self.status_icon], alignment=ft.MainAxisAlignment.CENTER),
                         ft.Row([self.status_text], alignment=ft.MainAxisAlignment.CENTER),
                         ft.Divider(height=20),
                         ft.Column([
-                            ft.Text("你:", size=14, color=colors.GREY_500),
+                            ft.Text("你:", size=14, color="grey500"),
                             self.transcription_text,
                         ]),
-                        ft.Divider(height=10, color=colors.TRANSPARENT),
+                        ft.Divider(height=10, color="transparent"),
                         ft.Column([
-                            ft.Text("小德:", size=14, color=colors.GREY_500),
+                            ft.Text("小德:", size=14, color="grey500"),
                             self.response_text,
                         ]),
                     ],
                     scroll=ft.ScrollMode.AUTO,
                 ),
                 padding=20,
-                bgcolor=colors.with_opacity(0.85, colors.BLACK),
+                bgcolor="black",
+                opacity=0.85,
                 border_radius=20,
                 expand=True,
             )
