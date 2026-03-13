@@ -89,13 +89,17 @@ except:
     porcupine = pvporcupine.create(access_key=PORCUPINE_ACCESS_KEY, keywords=['picovoice'])
 
 pa = pyaudio.PyAudio()
-audio_stream = pa.open(
-    rate=porcupine.sample_rate,
-    channels=CHANNELS,
-    format=pyaudio.paInt16,
-    input=True,
-    frames_per_buffer=porcupine.frame_length
-)
+try:
+    audio_stream = pa.open(
+        rate=porcupine.sample_rate,
+        channels=CHANNELS,
+        format=pyaudio.paInt16,
+        input=True,
+        frames_per_buffer=porcupine.frame_length
+    )
+except Exception as e:
+    print(f"❌ 无法启动音频流: {e}")
+    sys.exit(1)
 
 def detect_face_and_emotion():
     """检测人脸并分析情绪，同时返回 embedding (带锁保护)"""
@@ -169,7 +173,9 @@ def record_audio(max_duration):
             if energy < SILENCE_THRESHOLD: counter += 1
             else: counter = 0
             if recorded > int(porcupine.sample_rate / CHUNK_SIZE * 0.5) and counter > limit: break
-        except: break
+        except Exception as e:
+            print(f"⚠️ 录音读取中断: {e}")
+            break
     return b''.join(frames)
 
 def audio_to_text(audio_data):
@@ -296,13 +302,25 @@ def run_voice_assistant():
                 proactive_trigger_flag.clear()
                 mode = proactive_type[0]
                 i_p = "/tmp/p_s.png" if mode == "screen_insight" else None
-                if i_p: subprocess.run(["screencapture", "-x", i_p])
+                if i_p: 
+                    print("📸 [动作] 正在获取屏幕快照...")
+                    cp_res = subprocess.run(["screencapture", "-x", i_p])
+                    if cp_res.returncode != 0:
+                        print("⚠️ [动作] 屏幕快照获取失败")
+                        i_p = None
                 res = call_openclaw("打个招呼吧", is_proactive=True, p_mode=mode, image_path=i_p)
                 if res["type"] == "text": speak(res["content"])
                 if i_p and os.path.exists(i_p): os.remove(i_p)
                 continue
 
-            pcm_data = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
+            try:
+                pcm_data = audio_stream.read(porcupine.frame_length, exception_on_overflow=False)
+            except OSError as e:
+                if e.errno == -9981 or "Unknown Error" in str(e): # 兼容 macOS 偶发音频错误
+                    time.sleep(0.1)
+                    continue
+                raise e
+                
             pcm = struct.unpack_from("h" * porcupine.frame_length, pcm_data)
             if porcupine.process(pcm) >= 0:
                 global last_interaction_time
