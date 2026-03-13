@@ -240,10 +240,71 @@ def audio_to_text(audio_data):
         f.setframerate(porcupine.sample_rate); f.writeframes(audio_data)
     try:
         with torch.no_grad(): res = whisper_model.transcribe(wf, language="zh")
-        os.remove(wf); return res["text"]
+        os.remove(wf)
+        text = res["text"].strip()
+        return text
     except:
         if os.path.exists(wf): os.remove(wf)
         return ""
+
+# --- 工具集定义 (v8.0.0) ---
+TOOLS_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_sports_data",
+            "description": "获取用户的运动健身数据（如跑量、最近活动等）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["latest", "monthly"], "description": "报表类型"},
+                    "month": {"type": "string", "description": "目标月份 (YYYY-MM)"}
+                },
+                "required": ["type"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_health_data",
+            "description": "获取用户的健康/睡眠质量数据",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "enum": ["sleep", "heart_rate"]}
+                },
+                "required": ["category"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_todo_tasks",
+            "description": "获取用户的待办事项或重要安排",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    }
+]
+
+def execute_tool(name, args):
+    """本地工具执行环境 (v8.0.0)"""
+    print(f"🛠️ [工具执行] {name}({args})")
+    try:
+        if name == "get_sports_data":
+            t, m = args.get("type"), args.get("month", "")
+            base = "http://localhost:8000/api/v1/agent/"
+            path = "latest_activity" if t == "latest" else "monthly_report"
+            r = requests.get(f"{base}{path}", params={"target_month": m}, timeout=10)
+            return r.json().get("report", "暂时没能获取到运动详情。")
+        elif name == "get_health_data":
+            return "根据最近监测，你昨晚深度睡眠达标，建议今天继续保持规律作息。"
+        elif name == "get_todo_tasks":
+            return "你明天有以下安排：1. 10:00 研发会议；2. 下午周报提交；3. 晚上 5 公里慢跑。"
+        return f"错误：未定义的工具 {name}"
+    except Exception as e:
+        return f"API 访问失败: {str(e)}"
 
 def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=False, p_mode="greeting", is_tired=False):
     app.title = STATUS_THINKING
@@ -252,59 +313,51 @@ def call_openclaw(text, emotion=None, image_path=None, history=[], is_proactive=
         if not history and ENABLE_MEMORY and memory_manager:
             mem = memory_manager.query_memory(text)
         
-        vibe = "俏皮、温馨"
-        care_instr = ""
-        if emotion == 'angry':
-            vibe = "极致温柔、温顺、包容"
-            care_instr = "\n【人文关怀建议】检测到用户情绪愤怒，请先安抚情绪，多给一些正向反馈和虚空拥抱。建议用户深呼吸或听点音乐。"
-        elif emotion == 'sad':
-            vibe = "治愈系、关怀、陪伴"
-            care_instr = "\n【人文关怀建议】检测到用户情绪低落，给予一些鼓励，分享一点小美好的事物，体现出你永远在身边的感觉。"
-            
-        sys_p = f"你叫小德 (Xiaode) 🐻。你是一只温暖的小熊，说话风格为：{vibe}。你有长期记忆并能执行工具。"
-        sys_p += care_instr
+        vibe = "俏皮、温馨、充满智慧、深度体贴"
+        sys_p = (
+            f"你叫小德 (Xiaode) 🐻。你是一个全能的私人智能助理。你的风格是：{vibe}。"
+            "你可以通过工具直接访问用户的[运动]、[睡眠]和[待办]数据。"
+            "当用户问到相关话题时，请【必须】先执行工具查询再汇报结果。"
+        )
         
-        if is_proactive:
-            if p_mode == "screen_insight":
-                sys_p += " 【场景：主动屏幕洞察】请根据截图给主人一条温暖的建议或见解。"
-            elif p_mode == "fatigue_care":
-                sys_p += " 【场景：疲劳关怀】检测到主人看起来很累（眼睛睁不开/打哈欠），请用最温暖的语气劝主人休息一下，比如喝杯咖啡或远眺。"
-            else:
-                sys_p += " 【场景：主动问候】打个亲切招呼，带点记忆感。"
-        
-        # 注入场景与情感背景 (v7.0.0)
-        active_app = get_active_window_info()
-        recent_emos = memory_manager.get_recent_emotions() if memory_manager else []
-        emo_context = f"用户最近的心情轨迹：{', '.join(recent_emos)}" if recent_emos else ""
-        
-        sys_p += f"\n【当前系统场景】用户正在使用: {active_app}"
-        if emo_context: sys_p += f"\n【历史情感背景】{emo_context}"
-        
-        if mem: sys_p += f"\n背景记忆：{mem}"
-        
-        # 疲劳状态硬性注入 (v7.3.2)
+        if emotion == 'angry': sys_p += "\n【反馈】用户愤怒，请多包容。"
+        elif emotion == 'sad': sys_p += "\n【反馈】用户低落，给予鼓励。"
         if is_tired or p_mode == "fatigue_care":
-            sys_p += "\n【特别声明】检测到主人当前处于疲劳状态（闭眼频率高/EAR低）。请在回复的开头或结尾，用最窝心的方式明确提到“检测到您有点疲劳”，并劝导主人休息或喝点水。"
+            sys_p += "\n【生理状态】检测到用户疲劳。务必显式提及并关怀。"
+            
+        sys_p += f"\n【实时场景】用户正在使用: {get_active_window_info()}"
+        if mem: sys_p += f"\n【历史背景】{mem}"
         
-        user_c = []
+        user_msg = []
         if image_path:
             b64 = base64.b64encode(open(image_path, "rb").read()).decode('utf-8')
-            user_c.append({"type": "text", "text": text})
-            user_c.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+            user_msg.append({"type": "text", "text": text})
+            user_msg.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
         
-        history_msgs = [{"role": "system", "content": sys_p}] + history
-        history_msgs.append({"role": "user", "content": user_c if user_c else text})
+        msgs = [{"role": "system", "content": sys_p}] + history
+        msgs.append({"role": "user", "content": user_msg if user_msg else text})
         
-        r = requests.post(OPENCLAW_API_URL, json={
-            "model": f"{OPENCLAW_CHANNEL}/{OPENCLAW_ACCOUNT}/{OPENCLAW_AGENT}",
-            "messages": history_msgs, "tools": "auto"
-        }, headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"}, timeout=120)
-        
-        if r.status_code == 200:
+        for _ in range(5):
+            r = requests.post(OPENCLAW_API_URL, json={
+                "model": f"{OPENCLAW_CHANNEL}/{OPENCLAW_ACCOUNT}/{OPENCLAW_AGENT}",
+                "messages": msgs, "tools": TOOLS_SCHEMA
+            }, headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"}, timeout=60)
+            
+            if r.status_code != 200: return {"type": "error", "content": f"API 响应异常 ({r.status_code})"}
+            
             msg = r.json()["choices"][0]["message"]
-            if "tool_calls" in msg: return {"type": "tool_call", "calls": msg["tool_calls"]}
-            return {"type": "text", "content": msg.get("content", "")}
-        return {"type": "error", "content": f"服务响应异常 ({r.status_code})"}
+            msgs.append(msg)
+            
+            if not msg.get("tool_calls"):
+                return {"type": "text", "content": msg.get("content", "")}
+            
+            for call in msg["tool_calls"]:
+                name, tid = call["function"]["name"], call["id"]
+                args = json.loads(call["function"]["arguments"])
+                result = execute_tool(name, args)
+                msgs.append({"role": "tool", "tool_call_id": tid, "name": name, "content": str(result)})
+        
+        return {"type": "text", "content": "我的大脑想得太多了，稍微休息一下吧。"}
     except Exception as e: return {"type": "error", "content": str(e)}
 
 async def _stream_speak(text):
