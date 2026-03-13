@@ -18,6 +18,7 @@ import datetime
 import torch
 import warnings
 import logging
+import base64
 from onnxruntime import InferenceSession
 
 # 净化日志：屏蔽冗余输出、FutureWarning 和下载进度条
@@ -193,8 +194,29 @@ def get_time_greeting():
     else:
         return "太晚了，注意休息哦，德哥。"
 
-def call_openclaw(text, emotion=None):
-    """调用OpenClaw接口获取回复 (增强情感识别与长期记忆)"""
+def capture_screen():
+    """执行 macOS 静默截图并保存"""
+    output_path = "/tmp/screen.png"
+    print("📸  正在捕捉屏幕内容...")
+    try:
+        # -x 为静默模式，不发出快门声
+        subprocess.run(["screencapture", "-x", output_path], check=True)
+        return output_path
+    except Exception as e:
+        print(f"❌ 截图失败: {e}")
+        return None
+
+def encode_image_base64(image_path):
+    """将图片文件转换为 Base64 编码"""
+    try:
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')
+    except Exception as e:
+        print(f"❌ 图片编码失败: {e}")
+        return None
+
+def call_openclaw(text, emotion=None, image_path=None):
+    """调用OpenClaw接口获取回复 (增强情感识别、长期记忆与视觉分析)"""
     app.title = STATUS_THINKING
     try:
         # 1. 尝试从长期记忆中检索背景
@@ -219,16 +241,35 @@ def call_openclaw(text, emotion=None):
             }
             system_prompt += f" {emotion_prompts.get(emotion, '根据用户的情感状态，给予人性化的反馈。')}"
             
+        if image_path:
+            system_prompt += "\n当前已提供屏幕截图，请结合图片内容（如代码、图表、网页等）进行分析和回答。"
+
         headers = {
             "Authorization": f"Bearer {OPENCLAW_TOKEN}",
             "Content-Type": "application/json"
         }
         
+        # 3. 准备消息体 (兼容多模态)
+        user_content = []
+        if image_path:
+            base64_image = encode_image_base64(image_path)
+            if base64_image:
+                user_content.append({"type": "text", "text": text})
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{base64_image}"}
+                })
+        
+        if not user_content:
+            user_msg = {"role": "user", "content": text}
+        else:
+            user_msg = {"role": "user", "content": user_content}
+
         payload = {
             "model": SESSION_KEY,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
+                user_msg
             ]
         }
         
@@ -351,7 +392,7 @@ class VoiceAssistantApp(rumps.App):
 
     @rumps.clicked("关于阿信")
     def about(self, _):
-        rumps.alert("阿信 v2.2.0\n您的智能数字副官\n\n状态说明：\n💤 待机\n🎙️ 倾听\n🤔 思考\n🗣️ 播报")
+        rumps.alert("阿信 v2.3.0\n您的智能数字副官\n\n状态说明：\n💤 待机\n🎙️ 倾听\n🤔 思考\n🗣️ 播报")
 
     @rumps.clicked("重启助手")
     def restart(self, _):
@@ -380,7 +421,7 @@ def run_voice_assistant():
                 # 收到唤醒词，立即打断当前播放
                 stop_speaking()
                 
-                # 1. 立即启动异步视觉分析（不阻塞主链路）
+                # 1. 立即启动异步视觉分析（后台人脸/情绪）
                 emotion_result = [None] 
                 def background_vision():
                     try:
@@ -416,20 +457,31 @@ def run_voice_assistant():
                     app.title = STATUS_IDLE
                     continue
                 
-                # 5. 对于可能耗时较长的请求，提供先行反馈
+                # 5. [v2.3.0] 视觉分析触发检测 (Screen Awareness)
+                visual_keywords = ["看下屏幕", "看下这里", "看一下屏幕", "这是什么", "总结一下内容", "解释一下"]
+                image_path = None
+                if any(k in text for k in visual_keywords):
+                    speak("好的，我来看看您的屏幕。")
+                    image_path = capture_screen()
+
+                # 6. 对于可能耗时较长的请求，提供先行反馈
                 thinking_keywords = ["新闻", "播报", "查询", "最近", "搜索", "看下"]
-                if any(k in text for k in thinking_keywords):
+                if not image_path and any(k in text for k in thinking_keywords):
                     speak("好的，正在为您查阅，请稍等...")
 
-                # 6. 等待视觉分析线程结束
+                # 7. 等待视觉分析线程结束
                 vision_thread.join(timeout=2.0)
                 emotion = emotion_result[0]
                 
-                # 7. 调用OpenClaw并带入情绪内容
-                response = call_openclaw(text, emotion)
+                # 8. 调用OpenClaw并带入情绪内容及截图
+                response = call_openclaw(text, emotion, image_path)
                 speak(response, with_filler=True)
                 
-                # 8. 对话结束后，在后台异步提取并保存新的记忆事实
+                # 9. 清理临时截图
+                if image_path and os.path.exists(image_path):
+                    os.remove(image_path)
+
+                # 10. 对话结束后，在后台异步提取并保存新的记忆事实
                 if ENABLE_MEMORY and memory_manager:
                     print("💭 正在同步背景记忆...")
                     threading.Thread(
