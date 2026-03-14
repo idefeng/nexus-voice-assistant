@@ -273,8 +273,12 @@ def start_assistant():
     asyncio.run(main_loop())
 
 if __name__ == "__main__":
-    if ENABLE_UI and UI_TYPE == "flet":
-        threading.Thread(target=start_assistant, daemon=True).start()
-        start_flet_ui(ui.state_queue)
-    else:
-        asyncio.run(main_loop())
+    try:
+        if ENABLE_UI and UI_TYPE == "flet":
+            threading.Thread(target=start_assistant, daemon=True).start()
+            start_flet_ui(ui.state_queue)
+        else:
+            asyncio.run(main_loop())
+    except KeyboardInterrupt:
+        logger.info("👋 程序已被手动停止")
+        sys.exit(0)

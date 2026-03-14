@@ -90,8 +90,8 @@ class AudioEngine:
             
             url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
             headers = {
-                "X-Api-App-Key": VOLC_APPID,
-                "X-Api-Access-Key": VOLC_TOKEN,
+                "X-Api-App-Key": globals().get('VOLC_APPID'),
+                "X-Api-Access-Key": globals().get('VOLC_TOKEN'),
                 "X-Api-Resource-Id": "seed-tts-2.0",
                 "Content-Type": "application/json"
             }
@@ -99,7 +99,7 @@ class AudioEngine:
                 "user": {"uid": "xiaode_user", "device_id": "mac_client"},
                 "req_params": {
                     "text": text,
-                    "speaker": VOLC_VOICE,
+                    "speaker": globals().get('VOLC_VOICE', 'BV700_V2_streaming'),
                     "audio_params": {
                         "format": "mp3", 
                         "sample_rate": 24000,
