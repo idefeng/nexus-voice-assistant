@@ -64,6 +64,20 @@ if [ ! -f "models/emotion.onnx" ]; then
     curl -L -o models/emotion.onnx https://github.com/onnx/models/raw/main/vision/body_analysis/emotion_ferplus/model/emotion-ferplus-8.onnx
 fi
 
+# 人脸识别模型检查 (buffalo_l)
+# 注意：InsightFace 默认会查找 ~/.insightface/models/buffalo_l
+INSIGHTFACE_DIR="$HOME/.insightface/models/buffalo_l"
+if [ ! -d "$INSIGHTFACE_DIR" ]; then
+    echo "📥 正在下载人脸识别模型 (buffalo_l)..."
+    mkdir -p "$INSIGHTFACE_DIR"
+    curl -L -o /tmp/buffalo_l.zip https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip
+    unzip -q /tmp/buffalo_l.zip -d "$INSIGHTFACE_DIR"
+    rm /tmp/buffalo_l.zip
+    echo "✅ 人脸识别模型已安装到 $INSIGHTFACE_DIR"
+else
+    echo "✅ 人脸识别模型已存在"
+fi
+
 # 8. 检查配置文件
 if [ ! -f "config.py" ]; then
     echo "⚠️ 未找到 config.py，请参考项目仓库中的配置进行创建。"
