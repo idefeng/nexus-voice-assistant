@@ -1,5 +1,8 @@
 import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import sys
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 import asyncio
 import threading
 import logging
@@ -19,6 +22,33 @@ from pynput import keyboard
 from memory_manager import memory_manager
 from ui_manager import init_ui_manager
 from flet_ui import start_flet_ui
+
+# --- 全局单实例锁 ---
+PID_FILE = "/tmp/xiaode.pid"
+
+def check_single_instance():
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, 'r') as f:
+                old_pid = int(f.read().strip())
+            # 检查进程是否仍然存活
+            os.kill(old_pid, 0)
+            print(f"⚠️  检测到程序已在运行 (PID: {old_pid})。请先关闭旧进程。")
+            sys.exit(1)
+        except (OSError, ValueError):
+            # 进程不存在或文件内容有误，清理掉
+            os.remove(PID_FILE)
+    
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+
+def cleanup_pid():
+    if os.path.exists(PID_FILE):
+        os.remove(PID_FILE)
+
+import atexit
+atexit.register(cleanup_pid)
+check_single_instance()
 
 # 配置日志
 logging.basicConfig(
@@ -149,6 +179,7 @@ async def main_loop():
                 
                 res = await brain_engine.call_llm_async("小德想跟你打个招呼", is_proactive=True, p_mode=mode, image_path=i_p, update_ui_cb=ui.update_state)
                 if res["type"] == "text":
+                    logger.info(f"🤖 [小德 (主动)] {res['content']}")
                     await audio_engine.speak_async(res["content"], update_ui_title_cb=lambda t: setattr(ui, 'title', t))
                 if i_p and os.path.exists(i_p): os.remove(i_p)
                 continue
@@ -166,6 +197,9 @@ async def main_loop():
                 is_triggered = True
 
             if is_triggered:
+                if not follow_up:
+                    logger.info("🔍 [系统] 检测到唤醒词，正在进行人脸鉴权...")
+                
                 # 视觉快照鉴权
                 with state.camera_lock:
                     frame = state.camera_frame.copy() if state.camera_frame is not None else None
@@ -178,16 +212,19 @@ async def main_loop():
                         is_auth = sim > FACE_SIMILARITY_THRESHOLD
                     
                     if not is_auth:
-                        logger.warning("🚫 鉴权未通过")
+                        logger.warning("🚫 [鉴权失败] 未识别到主人人脸或人脸不匹配，已拒绝对话。")
                         ui.title = "🔒"
                         await asyncio.sleep(2)
                         follow_up = False; continue
+                    else:
+                        logger.info("✅ [鉴权通过] 已确认主人身份。")
 
                 if not follow_up: await audio_engine.speak_async("我在呢 🐻")
                 
                 ui.title = "🎙️"
                 ui.update_state({"transcription": "正在倾听...", "response": ""})
                 
+                logger.info("🎙️ [系统] 正在倾听，请说话...")
                 audio_data = await audio_engine.record_audio(audio_stream, porcupine.frame_length, porcupine.sample_rate, MAX_RECORD_SECONDS, is_follow_up=follow_up)
                 
                 if audio_data is None: 
@@ -196,6 +233,9 @@ async def main_loop():
                 text = await audio_engine.audio_to_text(audio_data, porcupine.sample_rate, CHANNELS)
                 if not text or not text.strip(): 
                     follow_up = False; ui.title = "💤"; continue
+                
+                print(f"\n{'='*20}\n🎤 [用户] {text}\n{'='*20}")
+                logger.info(f"🎤 [用户] {text}")
                 
                 if any(k in text for k in ["待机", "睡觉", "退下"]):
                     state.is_sleeping = True
@@ -208,6 +248,8 @@ async def main_loop():
                 res = await brain_engine.call_llm_async(text, emo, i_p, state.history, is_tired=tired, update_ui_cb=ui.update_state)
                 
                 if res["type"] == "text":
+                    print(f"🤖 [小德] {res['content']}\n{'-'*20}")
+                    logger.info(f"🤖 [小德] {res['content']}")
                     await audio_engine.speak_async(res["content"], with_filler=True, update_ui_title_cb=lambda t: setattr(ui, 'title', t))
                     state.history.append({"role": "user", "content": text})
                     state.history.append({"role": "assistant", "content": res["content"]})

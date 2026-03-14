@@ -21,8 +21,8 @@ ENABLE_VOICE_RECOGNITION = True
 ENABLE_FACE_RECOGNITION = True
 ENABLE_EMOTION_ANALYSIS = True
 ENABLE_MEMORY = True
-ENABLE_UI = True # 是否启用新 UI 界面
-UI_TYPE = "flet" # 支持: "flet", "rumps", "none"
+ENABLE_UI = False # 是否启用新 UI 界面
+UI_TYPE = "none" # 支持: "flet", "rumps", "none"
 
 # 音频配置
 SAMPLERATE = 16000
@@ -47,6 +47,10 @@ FACE_SIMILARITY_THRESHOLD = 0.65 # 阈值越大人脸识别越严格
 
 # TTS配置
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
+# 火山引擎 (豆包) 配置 - 如需使用请取消注释并填写
+# VOLC_APPID = "" 
+# VOLC_TOKEN = "" 
+# VOLC_VOICE = "BV700_V2_streaming" # 推荐音色: 灿灿 (针对对话优化)
 
 # 交互配置 (v7.2.0)
 FOLLOW_UP_TIMEOUT = 6.0 # 连续对话监听时长

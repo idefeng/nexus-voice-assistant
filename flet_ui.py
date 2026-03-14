@@ -1,5 +1,4 @@
 import flet as ft
-from flet import FontWeight, ThemeMode, Control, Page, Container, Column, Row, Text, Divider, ScrollMode, MainAxisAlignment, CrossAxisAlignment, BoxShadow, ShadowBlurStyle, Offset
 import queue
 import threading
 import time
@@ -21,17 +20,17 @@ class FletUI:
     def run(self):
         ft.app(target=self.main)
 
-    def main(self, page: Page):
+    def main(self, page: ft.Page):
         self.page = page
         page.title = "小德 (Xiaode)"
         page.window_width = 420
         page.window_height = 650
         page.window_always_on_top = True
-        page.theme_mode = ThemeMode.DARK
+        page.theme_mode = ft.ThemeMode.DARK
         page.padding = 0
         page.spacing = 0
-        page.window_bgcolor = ft.colors.TRANSPARENT
-        page.bgcolor = ft.colors.TRANSPARENT
+        page.window_bgcolor = ft.Colors.TRANSPARENT
+        page.bgcolor = ft.Colors.TRANSPARENT
         
         # 渐变配色方案
         self.colors = {
@@ -44,62 +43,62 @@ class FletUI:
         }
 
         # 状态图标容器 (带动画)
-        self.status_icon = Text("💤", size=100)
-        self.icon_container = Container(
+        self.status_icon = ft.Text("💤", size=100)
+        self.icon_container = ft.Container(
             content=self.status_icon,
-            alignment=ft.alignment.center,
-            animate_scale=ft.animation.Animation(600, ft.AnimationCurve.ELASTIC_OUT),
+            alignment=ft.Alignment.CENTER,
+            animate_scale=ft.Animation(600, ft.AnimationCurve.ELASTIC_OUT),
         )
         
-        self.status_text = Text("空闲中", size=22, weight=FontWeight.W_600, color="white70")
-        self.emotion_text = Text("", size=14, color="pink200", italic=True)
+        self.status_text = ft.Text("空闲中", size=22, weight=ft.FontWeight.W_600, color="white70")
+        self.emotion_text = ft.Text("", size=14, color="pink200", italic=True)
 
         # 文本内容区
-        self.transcription_text = Text("", size=16, color="white60", italic=True)
-        self.response_text = Text("", size=18, color="white", weight=FontWeight.W_400)
+        self.transcription_text = ft.Text("", size=16, color="white60", italic=True)
+        self.response_text = ft.Text("", size=18, color="white", weight=ft.FontWeight.W_400)
 
         # 玻璃拟态主容器
-        self.main_container = Container(
-            content=Column(
+        self.main_container = ft.Container(
+            content=ft.Column(
                 [
-                    Divider(height=40, color="transparent"),
-                    Row([self.icon_container], alignment=MainAxisAlignment.CENTER),
-                    Row([self.status_text], alignment=MainAxisAlignment.CENTER),
-                    Row([self.emotion_text], alignment=MainAxisAlignment.CENTER),
-                    Divider(height=30, color="white24"),
-                    Container(
-                        content=Column([
-                            Text("YOU", size=12, weight=FontWeight.BOLD, color="white30", letter_spacing=1.5),
+                    ft.Divider(height=40, color="transparent"),
+                    ft.Row([self.icon_container], alignment=ft.MainAxisAlignment.CENTER),
+                    ft.Row([self.status_text], alignment=ft.MainAxisAlignment.CENTER),
+                    ft.Row([self.emotion_text], alignment=ft.MainAxisAlignment.CENTER),
+                    ft.Divider(height=30, color="white24"),
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("YOU", size=12, weight=ft.FontWeight.BOLD, color="white30"),
                             self.transcription_text,
                         ], spacing=5),
                         padding=ft.padding.only(left=10)
                     ),
-                    Divider(height=20, color="transparent"),
-                    Container(
-                        content=Column([
-                            Text("XIAODE", size=12, weight=FontWeight.BOLD, color="pink300", letter_spacing=1.5),
+                    ft.Divider(height=20, color="transparent"),
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Text("XIAODE", size=12, weight=ft.FontWeight.BOLD, color="pink300"),
                             self.response_text,
                         ], spacing=8),
                         padding=ft.padding.only(left=10)
                     ),
                 ],
-                scroll=ScrollMode.AUTO,
-                horizontal_alignment=CrossAxisAlignment.START,
+                scroll=ft.ScrollMode.AUTO,
+                horizontal_alignment=ft.CrossAxisAlignment.START,
             ),
             padding=30,
             expand=True,
             border_radius=30,
             gradient=ft.LinearGradient(
-                begin=ft.alignment.top_left,
-                end=ft.alignment.bottom_right,
+                begin=ft.Alignment.TOP_LEFT,
+                end=ft.Alignment.BOTTOM_RIGHT,
                 colors=self.colors["idle"],
             ),
             blur=ft.Blur(20, 20),
             border=ft.border.all(1, "white10"),
-            shadow=BoxShadow(
+            shadow=ft.BoxShadow(
                 blur_radius=50,
                 color="black54",
-                offset=Offset(0, 20),
+                offset=ft.Offset(0, 20),
             )
         )
 
