@@ -19,7 +19,8 @@
 ### 2. 自动配置 (推荐)
 运行以下脚本进行环境初始化：
 ```bash
-bash install_m4.sh
+chmod +x setup.sh
+./setup.sh
 ```
 
 ### 3. OpenClaw 配置
