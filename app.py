@@ -26,18 +26,31 @@ from flet_ui import start_flet_ui
 # --- 全局单实例锁 ---
 PID_FILE = "/tmp/xiaode.pid"
 
+# 先配置日志，以便锁逻辑使用
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger("Xiaode")
+
 def check_single_instance():
     if os.path.exists(PID_FILE):
         try:
             with open(PID_FILE, 'r') as f:
-                old_pid = int(f.read().strip())
+                content = f.read().strip()
+                if not content: raise ValueError("PID file is empty")
+                old_pid = int(content)
             # 检查进程是否仍然存活
             os.kill(old_pid, 0)
-            print(f"⚠️  检测到程序已在运行 (PID: {old_pid})。请先关闭旧进程。")
+            print(f"⚠️  检测到程序已在运行 (PID: {old_pid})。请先关闭旧进程，或手动删除 {PID_FILE}。")
             sys.exit(1)
-        except (OSError, ValueError):
-            # 进程不存在或文件内容有误，清理掉
-            os.remove(PID_FILE)
+        except (ProcessLookupError, OSError, ValueError):
+            # 进程不存在或文件内容有误，说明是残留锁，清理掉
+            logger.info(f"♻️  清理残留的 PID 文件: {PID_FILE}")
+            try:
+                os.remove(PID_FILE)
+            except: pass
     
     with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
@@ -50,13 +63,7 @@ import atexit
 atexit.register(cleanup_pid)
 check_single_instance()
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
-)
-logger = logging.getLogger("Xiaode")
+# 已提前初始化
 
 class AssistantState:
     def __init__(self):
@@ -140,10 +147,14 @@ async def main_loop():
         logger.info("⌨️ [快捷键] 收到手动唤醒指令")
         proactive_engine.manual_trigger_flag.set()
 
-    hotkey = keyboard.GlobalHotKeys({
-        '<cmd>+<shift>+z': on_activate  # 自定义快捷键
-    })
-    hotkey.start()
+    try:
+        hotkey = keyboard.GlobalHotKeys({
+            '<cmd>+<shift>+z': on_activate  # 自定义快捷键
+        })
+        hotkey.start()
+        logger.info("⌨️ [系统] 手动唤醒快捷键已生效 (<cmd>+<shift>+z)")
+    except Exception as e:
+        logger.warning(f"⚠️ [系统] 快捷键监听启动失败 (可能由于 macOS 辅助功能权限未开启): {e}")
     
     # 初始化唤醒词
     porcupine = pvporcupine.create(
@@ -161,8 +172,16 @@ async def main_loop():
     )
     
     logger.info("✅ 小德 v10.0.0 (Modular-Pro) 已就绪...")
+    logger.info("👂 [系统] 正在监听唤醒词 '小德'，请尝试呼唤他。")
+    
+    last_heartbeat = time.time()
     
     while state.is_running:
+        # 每隔 300 秒打印一个“正在监听”的心跳，让用户确认程序没挂
+        if time.time() - last_heartbeat > 300:
+            logger.info("💓 [系统] 小德正在守护中，随时准备被唤醒...")
+            last_heartbeat = time.time()
+            
         try:
             # 1. 处理触发 (主动 或 手动)
             is_manual = proactive_engine.manual_trigger_flag.is_set()
