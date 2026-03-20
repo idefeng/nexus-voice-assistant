@@ -5,11 +5,12 @@
 ## 核心功能
 *   **唤醒词检测**：支持中文唤醒词 "**你好，小德**"（由 Picovoice 提供）。
 *   **长期记忆 (Deep Memory)**：集成 **ChromaDB** 向量数据库，支持跨会话记忆用户偏好和背景。
-*   **语音识别 (ASR)**：使用 OpenAI Whisper (**Medium** 模型) 进行高精度中文识别。
+*   **语音识别 (ASR)**：使用阿里 FunASR **SenseVoice-Small** 模型，支持高精度中文识别、**语音情绪检测**及音频事件识别。
 *   **高级语音合成 (TTS)**：使用 **Edge-TTS** 提供的神经网络拟人音色，支持 Markdown/Emoji 自动过滤。
 *   **丝滑交互 (Fluid UX)**：支持语音播报**随时打断**、分段加速播报及纯净终端日志输出。
 *   **智能对话**：通过 OpenClaw Gateway 连接 LLM (如 DeepSeek)，支持情感理解与背景检索（RAG）。
-*   **视觉分析**：自动调用摄像头进行人脸检测及情绪分析 (InsightFace + ONNX)。
+*   **语音活动检测 (VAD)**：使用 **Silero VAD** 深度学习模型，灵敏检测用户语音，大幅提升倾听灵敏度。
+*   **视觉分析**：自动调用摄像头进行人脸检测及情绪分析 (InsightFace + ONNX)。语音情绪优先，视觉情绪辅助。
 
 ## 安装与运行
 
@@ -41,6 +42,7 @@ openclaw gateway start
 *   `models/`: 存放唤醒词 (.ppn) 及视觉分析模型 (.onnx)。
 
 ## 版本记录
+*   **v10.1.0**: **感知革新版**。语音识别升级为 SenseVoice-Small（速度提升 15 倍），VAD 升级为 Silero VAD（深度学习语音检测），新增语音情绪识别（Happy/Sad/Angry/Neutral）。
 *   **v8.0.0**: **人机交互深度进化版**。打破数据孤岛，通过 OpenClaw 深度集成运动 (Nexus Sports)、健康 (Sleep) 及工作 (Tasks) 数据，实现真·智能数据辅助。
 *   **v7.3.2**: **疲劳感知细节优化版**。
 *   **v7.3.0**: **智停休眠版**。

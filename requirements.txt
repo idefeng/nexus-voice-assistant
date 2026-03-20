@@ -1,5 +1,8 @@
 pvporcupine==3.0.2
-openai-whisper==20231117
+funasr
+modelscope
+torchaudio
+silero-vad
 insightface==0.7.3
 opencv-python==4.8.1.78
 numpy==1.26.2

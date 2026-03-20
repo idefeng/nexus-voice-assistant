@@ -249,12 +249,15 @@ async def main_loop():
                 if audio_data is None: 
                     follow_up = False; ui.title = "💤"; continue
                 
-                text = await audio_engine.audio_to_text(audio_data, porcupine.sample_rate, CHANNELS)
+                text, voice_emotion = await audio_engine.audio_to_text(audio_data, porcupine.sample_rate, CHANNELS)
                 if not text or not text.strip(): 
                     follow_up = False; ui.title = "💤"; continue
                 
-                print(f"\n{'='*20}\n🎤 [用户] {text}\n{'='*20}")
-                logger.info(f"🎤 [用户] {text}")
+                # 语音情绪优先，视觉情绪作为辅助
+                final_emotion = voice_emotion if voice_emotion != "平静" else emo
+                
+                print(f"\n{'='*20}\n🎤 [用户] {text} (情绪: {final_emotion})\n{'='*20}")
+                logger.info(f"🎤 [用户] {text} (语音情绪: {voice_emotion}, 视觉情绪: {emo}, 最终: {final_emotion})")
                 
                 if any(k in text for k in ["待机", "睡觉", "退下"]):
                     state.is_sleeping = True
@@ -264,7 +267,7 @@ async def main_loop():
                 i_p = "/tmp/s.png" if any(k in text for k in ["看下屏幕", "分析"]) else None
                 if i_p: subprocess.run(["screencapture", "-x", i_p])
                 
-                res = await brain_engine.call_llm_async(text, emo, i_p, state.history, is_tired=tired, update_ui_cb=ui.update_state)
+                res = await brain_engine.call_llm_async(text, final_emotion, i_p, state.history, is_tired=tired, update_ui_cb=ui.update_state)
                 
                 if res["type"] == "text":
                     print(f"🤖 [小德] {res['content']}\n{'-'*20}")

@@ -30,7 +30,12 @@ CHANNELS = 1
 MAX_RECORD_SECONDS = 30
 
 # 模型配置
-WHISPER_MODEL = "medium"
+SENSEVOICE_MODEL = "iic/SenseVoiceSmall"  # 阿里 FunASR 语音识别 + 情绪检测
+
+# Silero VAD 配置
+VAD_THRESHOLD = 0.3           # VAD 灵敏度 (0-1, 越小越灵敏)
+VAD_MIN_SILENCE_MS = 500      # 最小静音判定时长 (ms)
+VAD_SPEECH_PAD_MS = 100       # 语音前后填充 (ms)
 
 # 数据库路径
 MEMORY_DB_PATH = "./memory_db"
