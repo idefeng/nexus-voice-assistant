@@ -527,6 +527,17 @@ async def main_loop():
     
     asyncio.create_task(proactive_loop())
     asyncio.create_task(emotion_update_loop())
+    
+    # 增加心跳任务 (每 2 分钟发送一次)，确保仪表盘显示 Online
+    async def heartbeat_loop():
+        while state.is_running:
+            if not state.is_sleeping:
+                try:
+                    await send_to_humansystems(text="", fatigue_score=0.0)
+                except: pass
+            await asyncio.sleep(120) 
+            
+    asyncio.create_task(heartbeat_loop())
 
     while state.is_running:
         try:
