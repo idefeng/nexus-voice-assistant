@@ -20,6 +20,7 @@ from engine.perception import perception_engine
 from engine.audio import audio_engine
 from engine.brain import brain_engine
 from engine.proactive import proactive_engine
+from engine.sync import sync_event_detached
 from pynput import keyboard
 from memory_manager import memory_manager
 from ui_manager import init_ui_manager
@@ -277,6 +278,9 @@ async def main_loop():
                 
                 # 语音情绪优先，视觉情绪作为辅助
                 final_emotion = voice_emotion if voice_emotion != "平静" else emo
+                
+                # [同步外挂] 触发异步同步逻辑
+                sync_event_detached(text, 1.0 if tired else 0.0)
                 
                 print(f"\n{'='*20}\n🎤 [用户] {text} (情绪: {final_emotion})\n{'='*20}")
                 logger.info(f"🎤 [用户] {text} (语音情绪: {voice_emotion}, 视觉情绪: {emo}, 最终: {final_emotion})")

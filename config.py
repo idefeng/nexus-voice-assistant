@@ -1,6 +1,7 @@
 # OpenClaw 基础配置
 OPENCLAW_API_URL = "http://localhost:18789/v1/chat/completions"
 OPENCLAW_TOKEN = "b5993a1fab396eb87cf92a6ab8c6e4962d198d2409b3714a"
+SYNC_INGEST_URL = "http://localhost:8000/events/ingest"
 
 # Advanced Routing (v2.4.0)
 # 格式: channel/accountId/agentId
