@@ -1,8 +1,11 @@
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["FUNASR_DISABLE_PROGRESS"] = "1"   # 禁用 funasr 推理进度条
+os.environ["MODELSCOPE_LOG_LEVEL"] = "WARNING" # 减少 modelscope 日志
 import sys
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*trust_remote_code.*")
 import asyncio
 import threading
 import logging
@@ -186,8 +189,11 @@ async def main_loop():
         frames_per_buffer=porcupine.frame_length
     )
     
-    logger.info("✅ 小德 v10.0.0 (Modular-Pro) 已就绪...")
-    logger.info("👂 [系统] 正在监听唤醒词 '小德'，请尝试呼唤他。")
+    print("\n" + "="*40)
+    print("✅ 小德 v10.1.0 (感知革新版) 已就绪")
+    print("👂 正在监听唤醒词 '小德'，请尝试呼唤他。")
+    print("="*40 + "\n")
+    logger.info("✅ 小德 v10.1.0 已就绪")
     
     last_heartbeat = time.time()
     
@@ -232,6 +238,7 @@ async def main_loop():
 
             if is_triggered:
                 if not follow_up:
+                    print("\n🔍 检测到唤醒词，正在进行人脸鉴权...")
                     logger.info("🔍 [系统] 检测到唤醒词，正在进行人脸鉴权...")
                 
                 # 视觉快照鉴权
@@ -258,7 +265,8 @@ async def main_loop():
                 ui.title = "🎙️"
                 ui.update_state({"transcription": "正在倾听...", "response": ""})
                 
-                logger.info("🎙️ [系统] 正在倾听，请说话...")
+                print("🎤 正在倾听，请说话...")
+                logger.info("🎤 [系统] 正在倾听，请说话...")
                 audio_data = await audio_engine.record_audio(audio_stream, porcupine.frame_length, porcupine.sample_rate, MAX_RECORD_SECONDS, is_follow_up=follow_up)
                 
                 if audio_data is None: 
@@ -292,8 +300,10 @@ async def main_loop():
                     "我去查一查。",
                 ]
                 ui.title = "🤔"
+                chosen_phrase = _rnd.choice(thinking_phrases)
+                print(f"🤔 [思考中] {chosen_phrase}")
                 thinking_task = asyncio.create_task(
-                    audio_engine.speak_async(_rnd.choice(thinking_phrases))
+                    audio_engine.speak_async(chosen_phrase)
                 )
                 llm_task = asyncio.create_task(
                     brain_engine.call_llm_async(text, final_emotion, i_p, state.history, is_tired=tired, update_ui_cb=ui.update_state)
@@ -303,7 +313,8 @@ async def main_loop():
                 res = await llm_task
                 
                 if res["type"] == "text":
-                    print(f"🤖 [小德] {res['content']}\n{'-'*20}")
+                    print(f"\n🤖 [小德] {res['content']}")
+                    print(f"{'-'*20}")
                     logger.info(f"🤖 [小德] {res['content']}")
                     was_interrupted = await audio_engine.speak_async(
                         res["content"], with_filler=True, 
