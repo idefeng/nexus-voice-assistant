@@ -417,7 +417,8 @@ class AudioEngine:
                 r'[\u267F]|[\u2693]|[\u26A1]|'        # ♿⚓⚡
                 r'[\u26AA-\u26AB]|'                   # ⚪⚫
                 r'[\u26F0-\u26FA]|'                   # ⛰-⛺
-                r'[\u2702]|[\u2708]|[\u270A-\u270D]', # ✂✈✊-✍
+                r'[\u2702]|[\u2708]|[\u270A-\u270D]|' # ✂✈✊-✍
+                r'<[^>]+>',                           # HTML 标签 (如 <sub>)
                 '', seg)
 
             if not clean.strip() or len(clean.strip()) < 2: continue
