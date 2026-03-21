@@ -428,13 +428,13 @@ async def send_to_humansystems(text, fatigue_score=0.0):
     """
     将对话文本和疲劳值发送到 humansystems 后端
     """
-    url = "http://localhost:8000/events/record"
+    url = "http://localhost:8000/events/ingest"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             payload = {
-                "content": text,
+                "text": text,
                 "fatigue_score": fatigue_score,
-                "sentiment": 0.5 # 默认中性，可后续扩展
+                "source": "mac-voice-assistant"
             }
             r = await client.post(url, json=payload)
             if r.status_code == 200:

@@ -15,6 +15,17 @@ import subprocess
 import pvporcupine
 import pyaudio
 import struct
+import warnings
+
+# --- 极致日志净化 ---
+logging.getLogger("funasr").setLevel(logging.ERROR)
+logging.getLogger("modelscope").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*trust_remote_code.*")
+
 from config import *
 from engine.perception import perception_engine
 from engine.audio import audio_engine
@@ -238,8 +249,7 @@ async def main_loop():
 
             if is_triggered:
                 if not follow_up:
-                    print("\n🔍 检测到唤醒词，正在进行人脸鉴权...")
-                    logger.info("🔍 [系统] 检测到唤醒词，正在进行人脸鉴权...")
+                    logger.info("🔍 [系统] 检测到唤醒词，正在鉴权...")
                 
                 # 视觉快照鉴权
                 with state.camera_lock:
@@ -265,8 +275,7 @@ async def main_loop():
                 ui.title = "🎙️"
                 ui.update_state({"transcription": "正在倾听...", "response": ""})
                 
-                print("🎤 正在倾听，请说话...")
-                logger.info("🎤 [系统] 正在倾听，请说话...")
+                print("🎤 [系统] 请说话...")
                 audio_data = await audio_engine.record_audio(audio_stream, porcupine.frame_length, porcupine.sample_rate, MAX_RECORD_SECONDS, is_follow_up=follow_up)
                 
                 if audio_data is None: 
@@ -282,8 +291,8 @@ async def main_loop():
                 # [同步外挂] 触发异步同步逻辑
                 sync_event_detached(text, 1.0 if tired else 0.0)
                 
-                print(f"\n{'='*20}\n🎤 [用户] {text} (情绪: {final_emotion})\n{'='*20}")
-                logger.info(f"🎤 [用户] {text} (语音情绪: {voice_emotion}, 视觉情绪: {emo}, 最终: {final_emotion})")
+                print(f"🎤 [用户] {text.strip()} (情绪: {final_emotion})")
+                logger.info(f"🎤 [用户] {text.strip()} (最终情绪: {final_emotion})")
                 
                 if any(k in text for k in ["待机", "睡觉", "退下"]):
                     state.is_sleeping = True
@@ -316,9 +325,10 @@ async def main_loop():
                 res = await llm_task
                 
                 if res["type"] == "text":
-                    print(f"\n🤖 [小德] {res['content']}")
-                    print(f"{'-'*20}")
-                    logger.info(f"🤖 [小德] {res['content']}")
+                    cleaned_res = res['content'].strip()
+                    print(f"🤖 [小德] {cleaned_res}")
+                    print("-" * 30)
+                    logger.info(f"🤖 [小德] {cleaned_res[:50]}...")
                     was_interrupted = await audio_engine.speak_async(
                         res["content"], with_filler=True, 
                         update_ui_title_cb=lambda t: setattr(ui, 'title', t),
