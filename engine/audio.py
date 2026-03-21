@@ -317,8 +317,19 @@ class AudioEngine:
             return False
 
     async def _wake_word_monitor(self, porcupine, audio_stream):
-        """在 TTS 播报期间并发监听唤醒词，检测到则设置中断标志"""
+        """在 TTS 播报期间并发监听唤醒词，检测到则设置中断标志
+        
+        防回路设计：
+        1. 延迟 3 秒后才开始监听（跳过 TTS 开头的扬声器回声）
+        2. 检测到唤醒词后，需连续检测到 2 次才确认（排除偶发误触发）
+        """
         try:
+            # 延迟启动：等待 TTS 前几秒播放完毕，避免扬声器回声触发唤醒词
+            await asyncio.sleep(3.0)
+            
+            consecutive_triggers = 0
+            CONFIRM_THRESHOLD = 2  # 需要连续触发 2 次才确认
+            
             while not self.interrupt_event.is_set():
                 pcm_data = await asyncio.to_thread(
                     audio_stream.read, porcupine.frame_length, 
@@ -326,13 +337,17 @@ class AudioEngine:
                 )
                 pcm = struct.unpack_from("h" * porcupine.frame_length, pcm_data)
                 if porcupine.process(pcm) >= 0:
-                    logger.info("🛑 [中断] 播报期间检测到唤醒词，立即中断播报")
-                    self.interrupt_event.set()
-                    # 立即终止当前 ffplay 进程
-                    if self.current_speaker_process:
-                        try: self.current_speaker_process.terminate()
-                        except: pass
-                    return
+                    consecutive_triggers += 1
+                    if consecutive_triggers >= CONFIRM_THRESHOLD:
+                        logger.info("🛑 [中断] 播报期间检测到唤醒词，立即中断播报")
+                        self.interrupt_event.set()
+                        # 立即终止当前 ffplay 进程
+                        if self.current_speaker_process:
+                            try: self.current_speaker_process.terminate()
+                            except: pass
+                        return
+                else:
+                    consecutive_triggers = 0
                 await asyncio.sleep(0.01)
         except Exception as e:
             logger.debug(f"唤醒词监听异常 (可忽略): {e}")
