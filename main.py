@@ -325,6 +325,18 @@ TOOLS_SCHEMA = [
                 "required": ["category"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_daily_summary",
+            "description": "获取用户人生系统的每日总结内容，作为背景知识",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
     }
 ]
 
@@ -343,6 +355,12 @@ async def execute_tool_async(name, args):
                 return res
             elif name == "get_health_data":
                 return "根据最近监测，你昨晚深度睡眠达标，建议今天继续保持规律作息。"
+            elif name == "get_daily_summary":
+                summary_path = "/Users/idefeng/DEV/humansystems/storage/life/daily_summary.md"
+                if os.path.exists(summary_path):
+                    with open(summary_path, 'r', encoding='utf-8') as f:
+                        return f.read()
+                return "未找到每日总结文件。"
             return f"错误：未定义的工具 {name}"
     except Exception as e:
         logger.error(f"工具执行失败: {e}")
@@ -405,6 +423,26 @@ async def call_openclaw_async(text, emotion=None, image_path=None, history=[], i
     except Exception as e:
         logger.error(f"AI 调用异常: {e}")
         return {"type": "error", "content": str(e)}
+
+async def send_to_humansystems(text, fatigue_score=0.0):
+    """
+    将对话文本和疲劳值发送到 humansystems 后端
+    """
+    url = "http://localhost:8000/events/record"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            payload = {
+                "content": text,
+                "fatigue_score": fatigue_score,
+                "sentiment": 0.5 # 默认中性，可后续扩展
+            }
+            r = await client.post(url, json=payload)
+            if r.status_code == 200:
+                logger.info("✅ 数据已同步至 humansystems")
+            else:
+                logger.warning(f"⚠️ 数据同步失败: {r.status_code}")
+    except Exception as e:
+        logger.error(f"数据同步异常: {e}")
 
 # --- TTS ---
 async def _stream_speak_async(text):
@@ -560,6 +598,8 @@ async def main_loop():
                     await speak_async(res["content"], with_filler=True)
                     history.append({"role": "user", "content": text})
                     history.append({"role": "assistant", "content": res["content"]})
+                    # 同步到人生系统
+                    asyncio.create_task(send_to_humansystems(text, fatigue_score=1.0 if tired else 0.0))
                     follow_up = True
                     ui.title = "👂"
                 else:
