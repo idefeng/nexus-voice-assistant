@@ -282,7 +282,25 @@ async def main_loop():
                 i_p = "/tmp/s.png" if any(k in text for k in ["看下屏幕", "分析"]) else None
                 if i_p: subprocess.run(["screencapture", "-x", i_p])
                 
-                res = await brain_engine.call_llm_async(text, final_emotion, i_p, state.history, is_tired=tired, update_ui_cb=ui.update_state)
+                # 即时语音反馈 + LLM 调用并发执行（消除空白等待期）
+                import random as _rnd
+                thinking_phrases = [
+                    "好的，让我想想。",
+                    "收到，请稍等。",
+                    "好的，我来帮你看看。",
+                    "嗯，稍等一下哦。",
+                    "我去查一查。",
+                ]
+                ui.title = "🤔"
+                thinking_task = asyncio.create_task(
+                    audio_engine.speak_async(_rnd.choice(thinking_phrases))
+                )
+                llm_task = asyncio.create_task(
+                    brain_engine.call_llm_async(text, final_emotion, i_p, state.history, is_tired=tired, update_ui_cb=ui.update_state)
+                )
+                # 等待两者都完成（语音反馈通常 <1秒，LLM 通常 2-10秒）
+                await thinking_task
+                res = await llm_task
                 
                 if res["type"] == "text":
                     print(f"🤖 [小德] {res['content']}\n{'-'*20}")
