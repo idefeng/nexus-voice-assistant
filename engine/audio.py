@@ -373,6 +373,9 @@ class AudioEngine:
         
         self.interrupt_event.clear()
         
+        # 预加载清理：移除所有 <sub>...</sub> 标签及其内部内容（通常是元数据）
+        text = re.sub(r'<sub\b[^>]*>.*?</sub>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        
         if with_filler and random.random() < 0.3:
             await self.speak_async(random.choice(self.NATURAL_FILLERS), with_filler=False)
         
@@ -417,8 +420,7 @@ class AudioEngine:
                 r'[\u267F]|[\u2693]|[\u26A1]|'        # ♿⚓⚡
                 r'[\u26AA-\u26AB]|'                   # ⚪⚫
                 r'[\u26F0-\u26FA]|'                   # ⛰-⛺
-                r'[\u2702]|[\u2708]|[\u270A-\u270D]|' # ✂✈✊-✍
-                r'<[^>]+>',                           # HTML 标签 (如 <sub>)
+                r'[\u2702]|[\u2708]|[\u270A-\u270D]', # ✂✈✊-✍
                 '', seg)
 
             if not clean.strip() or len(clean.strip()) < 2: continue
