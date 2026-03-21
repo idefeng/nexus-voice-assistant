@@ -44,6 +44,7 @@ class AudioEngine:
         self.pa = pyaudio.PyAudio()
         self.current_speaker_process = None
         self.NATURAL_FILLERS = ["嗯...", "我想想...", "好的，我明白了。", "让我想一下。"]
+        self.interrupt_event = asyncio.Event()  # 播报中断标志
 
         # SenseVoice 情绪映射
         self.EMOTION_MAP_SV = {
@@ -315,9 +316,39 @@ class AudioEngine:
             logger.error(f"本地 TTS 彻底失败: {e}")
             return False
 
-    async def speak_async(self, text, with_filler=False, update_ui_title_cb=None):
-        """TTS: 文字转语音"""
-        if not text or not text.strip(): return
+    async def _wake_word_monitor(self, porcupine, audio_stream):
+        """在 TTS 播报期间并发监听唤醒词，检测到则设置中断标志"""
+        try:
+            while not self.interrupt_event.is_set():
+                pcm_data = await asyncio.to_thread(
+                    audio_stream.read, porcupine.frame_length, 
+                    exception_on_overflow=False
+                )
+                pcm = struct.unpack_from("h" * porcupine.frame_length, pcm_data)
+                if porcupine.process(pcm) >= 0:
+                    logger.info("🛑 [中断] 播报期间检测到唤醒词，立即中断播报")
+                    self.interrupt_event.set()
+                    # 立即终止当前 ffplay 进程
+                    if self.current_speaker_process:
+                        try: self.current_speaker_process.terminate()
+                        except: pass
+                    return
+                await asyncio.sleep(0.01)
+        except Exception as e:
+            logger.debug(f"唤醒词监听异常 (可忽略): {e}")
+
+    async def speak_async(self, text, with_filler=False, update_ui_title_cb=None, 
+                          porcupine=None, audio_stream=None):
+        """TTS: 文字转语音 (支持唤醒词中断)
+        
+        Args:
+            porcupine: Porcupine 唤醒词引擎实例 (传入则启用播报中断)
+            audio_stream: PyAudio 输入流 (配合 porcupine 使用)
+            
+        Returns:
+            bool: True=被唤醒词中断, False=正常播完
+        """
+        if not text or not text.strip(): return False
         
         if update_ui_title_cb: update_ui_title_cb("🗣️")
         
@@ -325,8 +356,15 @@ class AudioEngine:
             try: self.current_speaker_process.terminate()
             except: pass
         
+        self.interrupt_event.clear()
+        
         if with_filler and random.random() < 0.3:
             await self.speak_async(random.choice(self.NATURAL_FILLERS), with_filler=False)
+        
+        # 如果提供了 porcupine，启动并发唤醒词监听
+        monitor_task = None
+        if porcupine and audio_stream:
+            monitor_task = asyncio.create_task(self._wake_word_monitor(porcupine, audio_stream))
         
         # 按句子分段，但将标点合并到前一个片段（避免单独标点导致 Edge-TTS 空音频）
         raw_segs = re.split(r'([。！？\n])', text)
@@ -376,6 +414,19 @@ class AudioEngine:
             if not success:
                 await self._local_speak_async(clean)
             
+            # 检查是否被中断
+            if self.interrupt_event.is_set():
+                logger.info("🛑 [中断] 跳过剩余播报内容")
+                break
+        
+        # 停止唤醒词监听
+        if monitor_task:
+            monitor_task.cancel()
+            try: await monitor_task
+            except asyncio.CancelledError: pass
+        
+        was_interrupted = self.interrupt_event.is_set()
         if update_ui_title_cb: update_ui_title_cb("💤")
+        return was_interrupted
 
 audio_engine = AudioEngine()

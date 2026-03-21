@@ -287,10 +287,19 @@ async def main_loop():
                 if res["type"] == "text":
                     print(f"🤖 [小德] {res['content']}\n{'-'*20}")
                     logger.info(f"🤖 [小德] {res['content']}")
-                    await audio_engine.speak_async(res["content"], with_filler=True, update_ui_title_cb=lambda t: setattr(ui, 'title', t))
+                    was_interrupted = await audio_engine.speak_async(
+                        res["content"], with_filler=True, 
+                        update_ui_title_cb=lambda t: setattr(ui, 'title', t),
+                        porcupine=porcupine, audio_stream=audio_stream
+                    )
                     state.history.append({"role": "user", "content": text})
                     state.history.append({"role": "assistant", "content": res["content"]})
-                    follow_up = True
+                    if was_interrupted:
+                        # 播报被唤醒词中断 → 直接进入下一轮对话
+                        logger.info("🛑 [系统] 播报被中断，直接进入倾听模式")
+                        follow_up = True
+                    else:
+                        follow_up = True
                     ui.title = "👂"
                 else:
                     follow_up = False
