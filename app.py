@@ -148,10 +148,25 @@ async def main_loop():
         proactive_engine.manual_trigger_flag.set()
 
     try:
-        hotkey = keyboard.GlobalHotKeys({
-            '<cmd>+<shift>+z': on_activate  # 自定义快捷键
-        })
-        hotkey.start()
+        # pynput 1.8+ GlobalHotKeys 存在回调签名兼容问题，使用 Listener 替代
+        from pynput.keyboard import Key, Listener as KbListener
+        _pressed_keys = set()
+        def _on_press_hotkey(key):
+            _pressed_keys.add(key)
+            # 检测 Cmd+Shift+Z
+            if (Key.cmd in _pressed_keys or Key.cmd_l in _pressed_keys or Key.cmd_r in _pressed_keys) and \
+               (Key.shift in _pressed_keys or Key.shift_l in _pressed_keys or Key.shift_r in _pressed_keys):
+                try:
+                    if hasattr(key, 'char') and key.char == 'z':
+                        on_activate()
+                except AttributeError:
+                    pass
+        def _on_release_hotkey(key):
+            _pressed_keys.discard(key)
+        
+        hotkey_listener = KbListener(on_press=_on_press_hotkey, on_release=_on_release_hotkey)
+        hotkey_listener.daemon = True
+        hotkey_listener.start()
         logger.info("⌨️ [系统] 手动唤醒快捷键已生效 (<cmd>+<shift>+z)")
     except Exception as e:
         logger.warning(f"⚠️ [系统] 快捷键监听启动失败 (可能由于 macOS 辅助功能权限未开启): {e}")

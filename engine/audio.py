@@ -27,6 +27,7 @@ class AudioEngine:
             vad_model="fsmn-vad",       # FunASR 内置 VAD
             vad_kwargs={"max_single_segment_time": 30000},
             trust_remote_code=True,
+            disable_update=True,        # 禁用版本检查，消除启动警告
         )
         logger.info("✅ SenseVoice-Small 加载完成")
 
@@ -327,10 +328,20 @@ class AudioEngine:
         if with_filler and random.random() < 0.3:
             await self.speak_async(random.choice(self.NATURAL_FILLERS), with_filler=False)
         
-        segs = [s.strip() for s in re.split(r'([。！？\n])', text) if s.strip()]
+        # 按句子分段，但将标点合并到前一个片段（避免单独标点导致 Edge-TTS 空音频）
+        raw_segs = re.split(r'([。！？\n])', text)
+        segs = []
+        for i in range(0, len(raw_segs), 2):
+            s = raw_segs[i]
+            if i + 1 < len(raw_segs):
+                s += raw_segs[i + 1]  # 将标点合并到前一句
+            s = s.strip()
+            if s:
+                segs.append(s)
+        
         for seg in segs or [text]:
             clean = re.sub(r'#+\s*|[*_\-]{1,3}|[`>]|\[([^\]]+)\]\([^\)]+\)|[\U00010000-\U0010ffff]', '', seg)
-            if not clean.strip(): continue
+            if not clean.strip() or len(clean.strip()) < 2: continue
             
             # 三级补位逻辑
             success = await self._volcengine_speak_async(clean)
