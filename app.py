@@ -1,7 +1,6 @@
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["FUNASR_DISABLE_PROGRESS"] = "1"   # 禁用 funasr 推理进度条
-os.environ["MODELSCOPE_LOG_LEVEL"] = "WARNING" # 减少 modelscope 日志
 import sys
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
